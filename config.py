@@ -35,6 +35,13 @@ RECRUITER_USERNAME = os.environ.get("RECRUITER_USERNAME", "recruiter")
 RECRUITER_PASSWORD = os.environ.get("RECRUITER_PASSWORD", "recruiter123")
 
 # =====================================================
+# ASSESSMENT
+# =====================================================
+# Total time limit = question count x this. Configurable so the duration
+# can be tuned per cohort without a code change.
+ASSESSMENT_SECONDS_PER_QUESTION = int(os.environ.get("ASSESSMENT_SECONDS_PER_QUESTION", "60"))
+
+# =====================================================
 # MYSQL
 # =====================================================
 MYSQL_HOST = os.environ.get("MYSQL_HOST", "localhost")

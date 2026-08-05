@@ -29,88 +29,162 @@ st.set_page_config(
 )
 
 # =====================================================
-# CUSTOM CSS (ONLY TEXT COLOR FIXED)
+# THEME
+#
+# One light, high-contrast palette used everywhere. The previous version
+# put black text on a saturated purple gradient and gave buttons a purple
+# gradient background with black text on top, so labels and controls were
+# close to unreadable. Everything below is a light surface with dark slate
+# text, and any coloured surface (buttons, selected tabs) gets white text.
+#
+# NOTE: matplotlib charts must draw their text DARK to stay readable on
+# these light surfaces - see the chart blocks further down.
 # =====================================================
+INK = "#1e293b"        # primary text
+INK_MUTED = "#475569"  # secondary text
+ACCENT = "#4f46e5"     # indigo - primary actions
+ACCENT_DARK = "#4338ca"
+
 st.markdown("""
 <style>
 * {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
+/* ---------- Page surface: light, low-saturation ---------- */
 html, body, [data-testid="stAppViewContainer"] {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%) !important;
+    background: linear-gradient(160deg, #eef2ff 0%, #f8fafc 45%, #faf5ff 100%) !important;
     min-height: 100vh;
 }
+[data-testid="stHeader"] { background: transparent; }
 
-/* Headings remain white */
-h1, h2, h3 {
-    color: #ffffff;
+/* ---------- Text: dark on light ---------- */
+h1, h2, h3, h4, h5, h6 {
+    color: #1e293b !important;
     font-weight: 700;
 }
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] strong,
+[data-testid="stMarkdownContainer"] em {
+    color: #1e293b;
+}
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p {
+    color: #475569 !important;
+}
 
-/* -----------------------------
-   BLACK TEXT VISIBILITY FIX
------------------------------- */
+/* ---------- Labels ---------- */
+label, .stRadio label, .stSelectbox label, .stTextInput label, .stTextArea label {
+    color: #334155 !important;
+    font-weight: 600;
+}
 
-/* Input text */
+/* ---------- Inputs: white field, dark value, visible border ---------- */
 .stTextInput input,
 .stTextArea textarea,
-.stSelectbox select {
-    color: #000000 !important;
-    background-color: rgba(255,255,255,0.85) !important;
+.stSelectbox div[data-baseweb="select"] > div,
+.stNumberInput input {
+    color: #0f172a !important;
+    background-color: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 8px !important;
 }
-
-/* Placeholder text */
+.stTextInput input:focus,
+.stTextArea textarea:focus {
+    border-color: #4f46e5 !important;
+    box-shadow: 0 0 0 2px rgba(79,70,229,0.18) !important;
+}
 .stTextInput input::placeholder,
 .stTextArea textarea::placeholder {
-    color: #000000 !important;
-    opacity: 0.7;
+    color: #64748b !important;
+    opacity: 1;
 }
 
-/* Labels */
-label,
-.stRadio label,
-.stSelectbox label {
-    color: #000000 !important;
+/* ---------- Buttons: solid accent, WHITE text ----------
+   Descendant selectors + data-testid on purpose: in current Streamlit the
+   <button> is NOT a direct child of .stButton (it sits inside a
+   .stTooltipHoverTarget wrapper), so a ">" selector silently never
+   matches and the button keeps its default theme colours. */
+.stButton button,
+[data-testid^="stBaseButton"] {
+    background: #4f46e5 !important;
+    border: none !important;
+    border-radius: 8px !important;
     font-weight: 600;
+    padding: 0.5rem 1rem;
+}
+.stButton button *,
+[data-testid^="stBaseButton"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+.stButton button:hover:not(:disabled),
+[data-testid^="stBaseButton"]:hover:not(:disabled) {
+    background: #4338ca !important;
+}
+.stButton button:disabled,
+[data-testid^="stBaseButton"]:disabled {
+    background: #e2e8f0 !important;
+}
+.stButton button:disabled *,
+[data-testid^="stBaseButton"]:disabled * {
+    color: #94a3b8 !important;
 }
 
-/* Markdown text */
-[data-testid="stMarkdownContainer"] {
-    color: #000000 !important;
-}
-
-/* Download button text */
+/* Download buttons: distinct teal so "get a file" reads differently
+   from "perform an action". Overrides the rule above, so it comes after. */
 .stDownloadButton button {
-    color: #000000 !important;
+    background: #0f766e !important;
 }
+.stDownloadButton button:hover:not(:disabled) {
+    background: #115e56 !important;
+}
+.stDownloadButton button * { color: #ffffff !important; }
 
-/* Metric labels */
-.stMetric label {
-    color: #000000 !important;
+/* ---------- Radio options: readable card rows ---------- */
+.stRadio [role="radiogroup"] > label {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    width: 100%;
 }
+.stRadio [role="radiogroup"] > label:hover { border-color: #a5b4fc; background: #f8faff; }
+.stRadio [role="radiogroup"] > label p { color: #1e293b !important; font-weight: 500; }
 
-/* Buttons */
-.stButton > button {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: #000000 !important;
-    font-weight: 600;
+/* ---------- Metrics ---------- */
+[data-testid="stMetric"] {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px 14px;
 }
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] p { color: #475569 !important; }
+[data-testid="stMetricValue"] { color: #1e293b !important; }
 
-/* Containers */
-.stContainer {
-    background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(10px);
-    padding: 24px;
-    border-radius: 12px;
-}
+/* ---------- Tabs ---------- */
+button[data-baseweb="tab"] { color: #475569 !important; }
+button[data-baseweb="tab"] p { color: #475569 !important; font-weight: 600; }
+button[data-baseweb="tab"][aria-selected="true"] p { color: #4f46e5 !important; }
 
-/* Alerts text */
-.stSuccess, .stError, .stWarning {
-    color: #000000 !important;
-}
+/* ---------- Alerts: tinted background, dark readable text ---------- */
+[data-testid="stAlert"] { border-radius: 8px; }
+[data-testid="stAlert"] p { color: #1e293b !important; }
+
+/* ---------- Expander / dataframe ---------- */
+[data-testid="stExpander"] summary p { color: #1e293b !important; }
+[data-testid="stDataFrame"] { border-radius: 8px; }
+
+/* ---------- Divider spacing ---------- */
+hr { border-color: #e2e8f0; }
 </style>
 """, unsafe_allow_html=True)
+
+# Matplotlib text/edge colour for the light surfaces above.
+CHART_INK = "#1e293b"
 
 # =====================================================
 # DATABASE (MySQL is the source of truth; Excel is export-only - see
@@ -125,7 +199,7 @@ def _init_db_once():
     db.create_account_if_missing(
         config.RECRUITER_USERNAME, config.RECRUITER_PASSWORD, role="recruiter"
     )
-    # Seed the jobs/mentors/learning catalog the matching engine ranks against.
+    # Seed the jobs/learning catalog the matching engine ranks against.
     db.seed_marketplace_data()
     return True
 
@@ -447,7 +521,8 @@ if "step" not in st.session_state:
         "assessment_id": None,
         "assessment_start_time": None,
         "recommendations": None,
-        "assessment_time_limit": 1500,  # seconds; recomputed as len(mcqs) * 60
+        # Recomputed per attempt as question_count * ASSESSMENT_SECONDS_PER_QUESTION
+        "assessment_time_limit": 1500,
         "current_question": 0,
     })
 
@@ -778,37 +853,112 @@ def generate_pdf(email, mcqs, answers, score):
     doc = SimpleDocTemplate(path)
     story = []
 
-    story.append(Paragraph("SkillGauge AI – Interview Assessment Report", styles["TitleX"]))
+    # Plain hyphen, not an en-dash: keeps the title safe across PDF viewers
+    # and mail clients that mis-map the WinAnsi en-dash codepoint.
+    story.append(Paragraph("SkillGauge AI - Interview Assessment Report", styles["TitleX"]))
     story.append(Spacer(1, 12))
     story.append(Paragraph(f"<b>Email:</b> {email}", styles["Normal"]))
     story.append(Paragraph(f"<b>Report Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
     story.append(Spacer(1, 12))
 
-    for i, q in enumerate(mcqs, 1):
-        story.append(Spacer(1, 10))
-        safe_question = escape(q['q'])
-        story.append(Paragraph(f"<b>{i}. {safe_question}</b>", styles["Normal"]))
+    total_questions = len(mcqs)
+    percentage = (score / total_questions) * 100 if total_questions else 0
+    unanswered = sum(1 for i in range(1, total_questions + 1) if answers.get(i) is None)
 
-        
-        user_ans = answers.get(i, "Not answered")
+    # Summary up front so the reader sees the outcome before the detail
+    story.append(Paragraph(f"<b>Score:</b> {score}/{total_questions} ({percentage:.1f}%)", styles["Normal"]))
+    story.append(Paragraph(
+        f"<b>Correct:</b> {score} &nbsp;&nbsp; "
+        f"<b>Incorrect:</b> {total_questions - score - unanswered} &nbsp;&nbsp; "
+        f"<b>Not answered:</b> {unanswered}",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 16))
+    story.append(Paragraph("<b>Question-by-question review</b>", styles["Normal"]))
+
+    # Colours chosen to stay legible in print and on screen.
+    GREEN, RED, AMBER = "#15803d", "#b91c1c", "#b45309"
+
+    for i, q in enumerate(mcqs, 1):
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"<b>{i}. {escape(q['q'])}</b>", styles["Normal"]))
+
+        user_ans = answers.get(i)
         correct_ans = q["answer"]
         is_correct = user_ans == correct_ans
-        
-        for k, v in q["options"].items():
-            marker = "✓" if (k == correct_ans and is_correct) else "✗" if (k == user_ans and not is_correct) else ""
-            safe_option = escape(f"{k}) {v} {marker}")
-            story.append(Paragraph(safe_option, styles["Normal"]))
-        
-        story.append(Spacer(1, 6))
 
-    total_questions = len(mcqs)
-    story.append(Spacer(1, 12))
+        # The correct option is ALWAYS marked, whether or not the candidate
+        # got it right - previously it was only marked on correct answers,
+        # so a wrong answer gave the reader no way to see the right one.
+        # Plain-text markers (not unicode ticks) because ReportLab's default
+        # Helvetica has no glyph for those and renders them as blank boxes.
+        for k, v in q["options"].items():
+            label = escape(f"{k}) {v}")
+            if k == correct_ans and k == user_ans:
+                line = f'<font color="{GREEN}"><b>{label} &nbsp;[CORRECT ANSWER - your choice]</b></font>'
+            elif k == correct_ans:
+                line = f'<font color="{GREEN}"><b>{label} &nbsp;[CORRECT ANSWER]</b></font>'
+            elif k == user_ans:
+                line = f'<font color="{RED}">{label} &nbsp;[YOUR ANSWER]</font>'
+            else:
+                line = label
+            story.append(Paragraph(line, styles["Normal"]))
+
+        if user_ans is None:
+            verdict = f'<font color="{AMBER}"><b>Not answered.</b> Correct answer: {correct_ans}</font>'
+        elif is_correct:
+            verdict = f'<font color="{GREEN}"><b>Correct.</b></font>'
+        else:
+            verdict = (
+                f'<font color="{RED}"><b>Incorrect.</b> You chose {user_ans}; '
+                f'correct answer is {correct_ans}.</font>'
+            )
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(verdict, styles["Normal"]))
+
+    story.append(Spacer(1, 18))
     story.append(Paragraph(f"<b>FINAL SCORE: {score}/{total_questions}</b>", styles["Normal"]))
-    percentage = (score / total_questions) * 100 if total_questions else 0
     story.append(Paragraph(f"<b>Percentage: {percentage:.1f}%</b>", styles["Normal"]))
 
     doc.build(story)
     return path
+
+# =====================================================
+# ASSESSMENT TIMER
+# =====================================================
+def assessment_seconds_remaining():
+    start = st.session_state.get("assessment_start_time")
+    if not start:
+        return None
+    return st.session_state.assessment_time_limit - (time.time() - start)
+
+
+@st.fragment(run_every="1s")
+def render_countdown():
+    """Live countdown.
+
+    This is a fragment with run_every so Streamlit reruns JUST this block
+    once a second. Previously the remaining time was computed in the main
+    script body, which only re-executes when the candidate interacts - so
+    the clock appeared frozen and only jumped forward when they answered a
+    question. Running it here also means the auto-submit fires on time
+    rather than waiting for the next click.
+    """
+    remaining = assessment_seconds_remaining()
+    if remaining is None:
+        return
+
+    if remaining <= 0:
+        # scope="app" reruns the whole script (not just this fragment), so
+        # the step change actually takes effect and the candidate lands on
+        # the results page.
+        st.session_state.step = 2
+        st.rerun(scope="app")
+
+    minutes, seconds = divmod(int(remaining), 60)
+    label = "⏳ Time Remaining" if remaining > 60 else "⚠️ Time Remaining"
+    st.metric(label, f"{minutes:02d}:{seconds:02d}")
+
 
 # =====================================================
 # HEADER WITH ADMIN BUTTON
@@ -952,10 +1102,10 @@ elif st.session_state.step == "admin_dashboard":
                     fig.patch.set_alpha(0)
                     ax.patch.set_alpha(0)
                     ax.bar(labels, values, color="#6366f1")
-                    ax.set_ylabel("Candidates", color="white")
-                    ax.tick_params(colors="white", labelsize=8)
+                    ax.set_ylabel("Candidates", color=CHART_INK)
+                    ax.tick_params(colors=CHART_INK, labelsize=8)
                     for spine in ax.spines.values():
-                        spine.set_color("white")
+                        spine.set_color("#cbd5e1")
                     st.pyplot(fig, use_container_width=False)
                 else:
                     st.info("Not enough data yet.")
@@ -968,13 +1118,17 @@ elif st.session_state.step == "admin_dashboard":
                     fig2, ax2 = plt.subplots(figsize=(4, 3))
                     fig2.patch.set_alpha(0)
                     ax2.patch.set_alpha(0)
-                    ax2.pie(
+                    _, src_texts, src_autotexts = ax2.pie(
                         [ai_count, fb_count],
                         labels=["AI-Generated", "Fallback"],
                         autopct="%1.0f%%",
                         colors=["#10b981", "#f59e0b"],
-                        textprops={"fontsize": 9, "weight": "bold", "color": "white"},
+                        textprops={"fontsize": 9, "weight": "bold"},
                     )
+                    for t in src_autotexts:      # on the coloured wedge
+                        t.set_color("#ffffff")
+                    for t in src_texts:          # on the light page
+                        t.set_color(CHART_INK)
                     ax2.axis("equal")
                     st.pyplot(fig2, use_container_width=False)
                 else:
@@ -1163,7 +1317,9 @@ elif st.session_state.step == 0:
                         st.session_state.ai_used = bool(existing["ai_generated"])
                         st.session_state.skills_snapshot = existing["skills_snapshot"] or skills.strip()
                         st.session_state.assessment_start_time = existing["started_at"].timestamp()
-                        st.session_state.assessment_time_limit = len(st.session_state.mcqs) * 60
+                        st.session_state.assessment_time_limit = (
+                            len(st.session_state.mcqs) * config.ASSESSMENT_SECONDS_PER_QUESTION
+                        )
                         st.session_state.current_question = min(
                             len(st.session_state.answers), len(st.session_state.mcqs) - 1
                         )
@@ -1186,7 +1342,9 @@ elif st.session_state.step == 0:
                                 ai_generated=st.session_state.ai_used,
                             )
                             st.session_state.assessment_start_time = time.time()
-                            st.session_state.assessment_time_limit = len(mcqs) * 60
+                            st.session_state.assessment_time_limit = (
+                                len(mcqs) * config.ASSESSMENT_SECONDS_PER_QUESTION
+                            )
                             st.session_state.current_question = 0
                             ai_status = "🤖 AI-Generated" if st.session_state.ai_used else "📚 Curated Questions"
                             st.success(f"✅ Questions ready! ({ai_status})")
@@ -1203,13 +1361,13 @@ elif st.session_state.step == 1:
     total_questions = len(st.session_state.mcqs)
     idx = min(st.session_state.current_question, total_questions - 1)
 
-    # --- Timer: auto-submit once time is up ---
-    elapsed = time.time() - st.session_state.assessment_start_time
-    remaining = st.session_state.assessment_time_limit - elapsed
-    if remaining <= 0:
+    # Safety net for the case where the fragment couldn't tick (tab
+    # suspended/backgrounded, machine asleep): catch expiry on any full
+    # rerun as well, so a returning candidate can't keep answering.
+    remaining = assessment_seconds_remaining()
+    if remaining is not None and remaining <= 0:
         st.session_state.step = 2
         st.rerun()
-    minutes, seconds = divmod(max(0, int(remaining)), 60)
 
     st.markdown("## 📝 Interview Assessment")
     top_col1, top_col2, top_col3 = st.columns(3)
@@ -1219,7 +1377,7 @@ elif st.session_state.step == 1:
         ai_status = "🤖 AI-Generated" if st.session_state.ai_used else "📚 Curated Questions"
         st.metric("Source", ai_status)
     with top_col3:
-        st.metric("Time Remaining", f"{minutes:02d}:{seconds:02d}")
+        render_countdown()   # ticks every second on its own
 
     st.progress((idx + 1) / total_questions)
     st.markdown("---")
@@ -1335,13 +1493,15 @@ elif st.session_state.step == 2:
             colors=colors,
             explode=(0.05, 0.05),
             shadow=False,
-            textprops={'fontsize': 10, 'weight': 'bold', 'color': 'white'}
+            textprops={'fontsize': 10, 'weight': 'bold', 'color': CHART_INK}
         )
+        # Percentages sit ON the coloured wedges, so those stay white;
+        # the outer category labels sit on the light page, so they go dark.
         for autotext in autotexts:
-            autotext.set_color('white')
+            autotext.set_color('#ffffff')
             autotext.set_fontsize(10)
         for text in texts:
-            text.set_color('white')
+            text.set_color(CHART_INK)
             text.set_fontsize(10)
         ax.axis("equal")
         st.pyplot(fig, use_container_width=False)
@@ -1395,8 +1555,8 @@ elif st.session_state.step == 2:
 
 # =====================================================
 # STUDENT FLOW - STEP 3: Talent Marketplace (Phase 5)
-# Candidate-job matching, internal mobility, mentors,
-# learning suggestions, and a career path.
+# Candidate-job matching, internal mobility, learning
+# suggestions, and a career path.
 # =====================================================
 elif st.session_state.step == 3:
     st.markdown("## 🎯 Your Career Opportunities")
@@ -1409,7 +1569,7 @@ elif st.session_state.step == 3:
         # Cache in session state: the embedding/AI calls are the expensive
         # part, and a rerun (tab switch, button click) shouldn't re-run them.
         if not st.session_state.get("recommendations"):
-            with st.spinner("🔎 Matching you to roles, mentors and learning paths..."):
+            with st.spinner("🔎 Matching you to roles and learning paths..."):
                 st.session_state.recommendations = matching_engine.get_recommendations(
                     st.session_state.user_id
                 )
@@ -1428,10 +1588,9 @@ elif st.session_state.step == 3:
 
         st.markdown("---")
 
-        tab_jobs, tab_internal, tab_mentors, tab_learning, tab_path = st.tabs([
+        tab_jobs, tab_internal, tab_learning, tab_path = st.tabs([
             "💼 Job Matches",
             "🔄 Internal Mobility",
-            "👥 Mentors",
             "📚 Learning",
             "🧭 Career Path",
         ])
@@ -1460,20 +1619,6 @@ elif st.session_state.step == 3:
             st.markdown("#### Internal moves you could grow into")
             render_jobs(recs["internal_jobs"], "No internal mobility options available yet.")
 
-        with tab_mentors:
-            st.markdown("#### Mentors who can help you grow")
-            if not recs["mentors"]:
-                st.info("No mentors available yet.")
-            for mentor in recs["mentors"]:
-                st.markdown(f"### {mentor['name']}  —  {mentor['relevance_percent']}% relevance")
-                st.markdown(f"*{mentor['bio']}*")
-                st.markdown(f"**Expertise:** {mentor['expertise']}")
-                if mentor["shared_skills"]:
-                    st.markdown(f"🤝 **Common ground:** {', '.join(mentor['shared_skills'])}")
-                if mentor["can_teach"]:
-                    st.markdown(f"🎓 **Can teach you:** {', '.join(mentor['can_teach'])}")
-                st.markdown("---")
-
         with tab_learning:
             st.markdown("#### Recommended next, highest priority first")
             if not recs["learning"]:
@@ -1484,8 +1629,6 @@ elif st.session_state.step == 3:
                 st.markdown(f"**Priority:** {badge}  |  **Skill:** {item['skill_tag']}")
                 st.markdown(f"_{item['reason']}_")
                 st.markdown(item["description"])
-                if item["url"]:
-                    st.markdown(f"[Open course]({item['url']})")
                 st.markdown("---")
 
         with tab_path:

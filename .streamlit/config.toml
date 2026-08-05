@@ -1,0 +1,15 @@
+# Pin the theme so Streamlit's own widget colours (inputs, radios, tabs,
+# dataframes, buttons) are generated from this palette instead of being
+# left on the viewer's dark/light default and clashing with the app's
+# light surfaces. Without this, widgets rendered dark-on-dark or
+# light-on-light depending on the browser setting.
+[theme]
+base = "light"
+primaryColor = "#4f46e5"
+backgroundColor = "#f8fafc"
+secondaryBackgroundColor = "#eef2ff"
+textColor = "#1e293b"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

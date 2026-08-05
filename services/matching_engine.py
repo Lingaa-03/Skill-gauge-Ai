@@ -4,7 +4,6 @@ Talent marketplace matching engine.
 Maps a candidate's validated skill profile onto:
   - external job openings        (candidate-job matching)
   - internal mobility roles      (internal mobility)
-  - mentors                      (mentorship pairing)
   - learning resources           (learning suggestions)
   - a suggested next-step career path
 
@@ -21,8 +20,8 @@ The skill-match component itself combines two views:
                             Learning") via text-embedding-3-large
 
 Embeddings are computed lazily and cached in the DB, so the first match
-for a new job/mentor/resource pays the embedding cost once and every
-later match is a cheap vector comparison.
+for a new job pays the embedding cost once and every later match is a
+cheap vector comparison.
 """
 import json
 import math
@@ -189,39 +188,6 @@ def match_jobs(profile, internal=False, top_n=5):
     return results[:top_n]
 
 
-def match_mentors(profile, top_n=3):
-    """Suggest mentors. Deliberately biased toward COMPLEMENTARY expertise -
-    a mentor is most useful where the candidate is weakest, so we rank on
-    overlap with the candidate's growth areas as well as their strengths."""
-    candidate_skills = _tokenize_skills(profile["skills_text"])
-    candidate_vector = _embed_candidate_profile(profile["skills_text"]) if profile["skills_text"] else None
-
-    results = []
-    for mentor in db.get_mentors():
-        mentor_text = f"{mentor['name']}. Expertise: {mentor['expertise']}. {mentor['bio']}"
-        mentor_vector = _get_or_compute_embedding(mentor, mentor_text, db.set_mentor_embedding)
-
-        relevance = _skill_match_score(
-            candidate_skills, candidate_vector, mentor["expertise"], mentor_vector
-        )
-        expertise = _tokenize_skills(mentor["expertise"])
-        shared = sorted({e for e in expertise if any(e in c or c in e for c in candidate_skills)})
-        can_teach = sorted(expertise - set(shared))
-
-        results.append({
-            "id": mentor["id"],
-            "name": mentor["name"],
-            "expertise": mentor["expertise"],
-            "bio": mentor["bio"],
-            "relevance_percent": round(relevance * 100, 1),
-            "shared_skills": shared,
-            "can_teach": can_teach,
-        })
-
-    results.sort(key=lambda r: r["relevance_percent"], reverse=True)
-    return results[:top_n]
-
-
 def suggest_learning(profile, missing_skills=None, top_n=5):
     """Recommend learning resources. Skills the candidate is MISSING for
     their best-matching roles are prioritized over ones they already have -
@@ -316,7 +282,6 @@ def get_recommendations(user_id):
         "profile": profile,
         "external_jobs": external_jobs,
         "internal_jobs": internal_jobs,
-        "mentors": match_mentors(profile, top_n=3),
         "learning": suggest_learning(profile, missing_skills=gap_pool, top_n=5),
         "career_path": suggest_career_path(profile, external_jobs or internal_jobs),
     }

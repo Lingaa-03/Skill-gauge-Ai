@@ -100,15 +100,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
-CREATE TABLE IF NOT EXISTS mentors (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    expertise TEXT NULL,
-    bio TEXT NULL,
-    embedding_json LONGTEXT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
-
 CREATE TABLE IF NOT EXISTS learning_resources (
     id INT AUTO_INCREMENT PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
@@ -626,8 +617,8 @@ def get_all_assessments_detailed():
 # =====================================================
 # TALENT MARKETPLACE (Phase 5)
 #
-# jobs/mentors/learning_resources are seeded once (seed_marketplace_data)
-# with a small curated catalog. Embeddings are computed lazily by
+# jobs/learning_resources are seeded once (seed_marketplace_data) with a
+# small curated catalog. Embeddings are computed lazily by
 # services/matching_engine.py and stored back via the set_*_embedding
 # functions below, so a fresh row is matchable on the next lookup
 # without needing a separate offline embedding job.
@@ -646,16 +637,6 @@ _SEED_JOBS = [
     ("Full Stack Developer (Internal Mobility)", "Grow into an end-to-end role across an internal product line.", "JavaScript, Python, SQL, HTML/CSS", "Engineering", True),
     ("Data Analyst (Internal Mobility)", "Support internal teams with dashboards and ad-hoc analysis.", "SQL, Python, Data Visualization", "Data", True),
     ("Senior Software Engineer (Internal Mobility)", "Step up into a senior role owning system design for a core service.", "Python, System Design, SQL, Java", "Engineering", True),
-]
-
-_SEED_MENTORS = [
-    # (name, expertise, bio)
-    ("Anita Rao", "Machine Learning, Python, Statistics", "Senior Data Scientist, 8 years building ML products."),
-    ("Rahul Mehta", "AWS, DevOps, Python", "Cloud Architect specializing in scalable infrastructure."),
-    ("Sara Khan", "Java, SQL, System Design", "Backend Lead with deep experience in distributed systems."),
-    ("Vikram Nair", "JavaScript, React, HTML/CSS", "Frontend Lead focused on accessible, performant UI."),
-    ("Priya Menon", "SQL, Database Optimization", "Database Specialist for high-throughput production systems."),
-    ("Arjun Iyer", "Python, JavaScript, SQL", "Full Stack mentor supporting engineers moving across the stack."),
 ]
 
 _SEED_LEARNING_RESOURCES = [
@@ -685,8 +666,8 @@ _SEED_LEARNING_RESOURCES = [
 
 
 def seed_marketplace_data():
-    """Insert the curated jobs/mentors/learning-resources catalog if each
-    table is still empty. Safe to call every startup - never duplicates."""
+    """Insert the curated jobs/learning-resources catalog if each table is
+    still empty. Safe to call every startup - never duplicates."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -697,13 +678,6 @@ def seed_marketplace_data():
                 """INSERT INTO jobs (title, description, required_skills, department, is_internal)
                    VALUES (%s, %s, %s, %s, %s)""",
                 _SEED_JOBS,
-            )
-
-        cursor.execute("SELECT COUNT(*) FROM mentors")
-        if cursor.fetchone()[0] == 0:
-            cursor.executemany(
-                "INSERT INTO mentors (name, expertise, bio) VALUES (%s, %s, %s)",
-                _SEED_MENTORS,
             )
 
         cursor.execute("SELECT COUNT(*) FROM learning_resources")
@@ -730,18 +704,6 @@ def get_jobs():
         conn.close()
 
 
-def get_mentors():
-    conn = get_connection()
-    try:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM mentors")
-        rows = cursor.fetchall()
-        cursor.close()
-        return rows
-    finally:
-        conn.close()
-
-
 def get_learning_resources():
     conn = get_connection()
     try:
@@ -755,22 +717,14 @@ def get_learning_resources():
 
 
 def set_job_embedding(job_id, embedding_json):
-    _set_embedding("jobs", job_id, embedding_json)
-
-
-def set_mentor_embedding(mentor_id, embedding_json):
-    _set_embedding("mentors", mentor_id, embedding_json)
-
-
-def set_learning_resource_embedding(resource_id, embedding_json):
-    _set_embedding("learning_resources", resource_id, embedding_json)
-
-
-def _set_embedding(table, row_id, embedding_json):
+    """Cache a job's embedding. Jobs are the only table that needs this -
+    learning resources are matched by skill tag/title, not by embedding."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute(f"UPDATE {table} SET embedding_json = %s WHERE id = %s", (embedding_json, row_id))
+        cursor.execute(
+            "UPDATE jobs SET embedding_json = %s WHERE id = %s", (embedding_json, job_id)
+        )
         cursor.close()
     finally:
         conn.close()
