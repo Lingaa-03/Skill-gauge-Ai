@@ -12,6 +12,7 @@ than writing raw SQL elsewhere, so the schema/queries stay in one place.
 import json
 from datetime import datetime
 
+import bcrypt
 import mysql.connector
 from mysql.connector import pooling
 
@@ -120,8 +121,23 @@ CREATE TABLE IF NOT EXISTS learning_resources (
 """
 
 
+def _ensure_column(cursor, table, column, ddl):
+    """Idempotently add a column to an existing table (CREATE TABLE IF NOT
+    EXISTS doesn't help once the table already exists from an earlier
+    phase - this is the migration path for that)."""
+    cursor.execute(
+        """SELECT COUNT(*) FROM information_schema.columns
+           WHERE table_schema = %s AND table_name = %s AND column_name = %s""",
+        (config.MYSQL_DATABASE, table, column),
+    )
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 def init_db():
-    """Create all tables if they don't already exist. Safe to call every startup."""
+    """Create all tables if they don't already exist, run any pending
+    column migrations, and seed the admin account. Safe to call every
+    startup."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -129,9 +145,65 @@ def init_db():
             statement = statement.strip()
             if statement:
                 cursor.execute(statement)
+
+        # Auth (Phase 4): admin/recruiter accounts log in with a
+        # username + hashed password rather than email + skills.
+        _ensure_column(cursor, "users", "username", "username VARCHAR(100) NULL UNIQUE")
+        _ensure_column(cursor, "users", "password_hash", "password_hash VARCHAR(255) NULL")
+
         cursor.close()
     finally:
         conn.close()
+
+
+# =====================================================
+# AUTH (Phase 4)
+# =====================================================
+def create_account_if_missing(username, password, role="admin"):
+    """Seed a username/password account (admin or recruiter) if one with
+    this username doesn't already exist. Never overwrites an existing
+    password - this only bootstraps the account once."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+        if cursor.fetchone():
+            cursor.close()
+            return
+
+        password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        cursor.execute(
+            """INSERT INTO users (name, email, role, username, password_hash)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (username, f"{username}@internal.skillup", role, username, password_hash),
+        )
+        cursor.close()
+    finally:
+        conn.close()
+
+
+def verify_login(username, password):
+    """Check a username/password against the stored hash. Returns the
+    user dict (id, role, ...) on success, or None on failure - never
+    raises on bad credentials, so a login attempt can't leak timing/
+    error-shape information about which part was wrong."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT id, username, role, password_hash FROM users WHERE username = %s",
+            (username,),
+        )
+        user = cursor.fetchone()
+        cursor.close()
+    finally:
+        conn.close()
+
+    if not user or not user["password_hash"]:
+        return None
+    if not bcrypt.checkpw(password.encode("utf-8"), user["password_hash"].encode("utf-8")):
+        return None
+    return user
 
 
 # =====================================================

@@ -2,6 +2,7 @@ streamlit
 openai
 python-dotenv
 mysql-connector-python
+bcrypt
 reportlab
 openpyxl
 PyPDF2

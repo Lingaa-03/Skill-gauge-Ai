@@ -119,6 +119,9 @@ label,
 @st.cache_resource
 def _init_db_once():
     db.init_db()
+    # Seed the admin account from .env on first run only - this never
+    # overwrites a password that's already been set.
+    db.create_account_if_missing(config.ADMIN_USERNAME, config.ADMIN_PASSWORD, role="admin")
     return True
 
 _init_db_once()
@@ -431,6 +434,7 @@ if "step" not in st.session_state:
         "email": "",
         "evaluated": False,
         "admin_logged": False,
+        "admin_role": None,
         "ai_used": False,  # Track if AI or fallback was used
         "user_id": None,
         "skills_snapshot": "",
@@ -810,8 +814,10 @@ if st.session_state.step == "admin_login":
             col_login, col_back = st.columns(2)
             with col_login:
                 if st.button("✓ Login", use_container_width=True):
-                    if username == config.ADMIN_USERNAME and password == config.ADMIN_PASSWORD:
+                    user = db.verify_login(username.strip(), password)
+                    if user and user["role"] in ("admin", "recruiter"):
                         st.session_state.admin_logged = True
+                        st.session_state.admin_role = user["role"]
                         st.session_state.step = "admin_dashboard"
                         st.rerun()
                     else:
@@ -918,6 +924,7 @@ elif st.session_state.step == "admin_dashboard":
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.step = 0
             st.session_state.admin_logged = False
+            st.session_state.admin_role = None
             st.rerun()
 
 # =====================================================
