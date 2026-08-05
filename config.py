@@ -31,12 +31,20 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
 # =====================================================
+# MYSQL
+# =====================================================
+MYSQL_HOST = os.environ.get("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.environ.get("MYSQL_PORT", "3306"))
+MYSQL_DATABASE = os.environ.get("MYSQL_DATABASE", "skillup_db")
+MYSQL_USER = os.environ.get("MYSQL_USER", "skillup_app")
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "")
+
+# =====================================================
 # PATHS
 # =====================================================
 RESULT_DIR = "results"
 PDF_DIR = "pdf_reports"
 EXCEL_PATH = os.path.join(RESULT_DIR, "student_scores.xlsx")
-DB_PATH = "skillup.db"
 
 os.makedirs(RESULT_DIR, exist_ok=True)
 os.makedirs(PDF_DIR, exist_ok=True)

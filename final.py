@@ -1,5 +1,5 @@
 import streamlit as st
-import os, json, re, smtplib, random
+import os, json, re, smtplib, random, time
 from xml.sax.saxutils import escape
 from datetime import datetime
 from email.message import EmailMessage
@@ -13,9 +13,10 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import inch
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 
 import config
+import db
 from services import ai_client
 
 # =====================================================
@@ -110,6 +111,17 @@ label,
 }
 </style>
 """, unsafe_allow_html=True)
+
+# =====================================================
+# DATABASE (MySQL is the source of truth; Excel is export-only - see
+# export_excel_from_db() below)
+# =====================================================
+@st.cache_resource
+def _init_db_once():
+    db.init_db()
+    return True
+
+_init_db_once()
 
 # =====================================================
 # PATHS (from config.py, which reads .env)
@@ -419,7 +431,14 @@ if "step" not in st.session_state:
         "email": "",
         "evaluated": False,
         "admin_logged": False,
-        "ai_used": False  # Track if AI or fallback was used
+        "ai_used": False,  # Track if AI or fallback was used
+        "user_id": None,
+        "skills_snapshot": "",
+        "saved_to_db": False,
+        "assessment_id": None,
+        "assessment_start_time": None,
+        "assessment_time_limit": 1500,  # seconds; recomputed as len(mcqs) * 60
+        "current_question": 0,
     })
 
 # =====================================================
@@ -481,15 +500,133 @@ Resume:
         st.warning("⚠️ AI unavailable. Please enter skills manually.")
         return ""
 
-def generate_interview_mcqs(skills):
+
+def categorize_skills(skills_text):
     """
-    AI-first MCQ generation with guaranteed fallback
+    Best-effort categorization for DB storage. Never blocks the flow -
+    falls back to a deduped, uncategorized list if the AI call fails or
+    returns something unparsable.
     """
+    skill_list = [s.strip() for s in skills_text.split(",") if s.strip()]
+    if not skill_list:
+        return []
 
     prompt = f"""
-Return ONLY a valid JSON ARRAY.
+Categorize each of these technical skills into exactly ONE category from:
+Programming Language, Framework, Database, Cloud, Tool, Domain/Concept.
 
-FORMAT:
+Skills: {", ".join(skill_list)}
+
+Return ONLY a valid JSON array, no commentary, in this exact format:
+[{{"skill": "Python", "category": "Programming Language"}}]
+"""
+    try:
+        text = ai_client.chat_complete(prompt, max_tokens=3000)
+        parsed = extract_json_flexible(text)
+        if parsed and isinstance(parsed, list):
+            seen, cleaned = set(), []
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("skill", "")).strip()
+                category = str(item.get("category", "")).strip() or "Uncategorized"
+                key = name.lower()
+                if name and key not in seen:
+                    seen.add(key)
+                    cleaned.append({"skill": name, "category": category})
+            if cleaned:
+                return cleaned
+    except Exception as e:
+        print(f"[SKILL CATEGORIZATION ERROR]: {e}")
+
+    # Fallback: dedup only, no category
+    seen, cleaned = set(), []
+    for name in skill_list:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            cleaned.append({"skill": name, "category": "Uncategorized"})
+    return cleaned
+
+
+def validate_mcqs(mcqs):
+    """
+    Guardrail pass over AI-generated questions before they're ever served
+    to a candidate: exactly 4 non-empty options, a valid answer key, and
+    no duplicate questions. Anything malformed is dropped rather than shown.
+    """
+    if not isinstance(mcqs, list):
+        return []
+
+    valid, seen_questions = [], set()
+    for item in mcqs:
+        if not isinstance(item, dict):
+            continue
+        q_text = str(item.get("q", "")).strip()
+        options = item.get("options")
+        answer = item.get("answer")
+
+        if not q_text or not isinstance(options, dict):
+            continue
+        if set(options.keys()) != {"A", "B", "C", "D"}:
+            continue
+        if any(not str(v).strip() for v in options.values()):
+            continue
+        if answer not in options:
+            continue
+
+        key = q_text.lower()
+        if key in seen_questions:
+            continue
+        seen_questions.add(key)
+        valid.append(item)
+
+    return valid
+
+
+def get_fallback_mcqs(skills_text, count=25):
+    """
+    Skill-aware fallback: prefer curated questions whose domain matches
+    the candidate's stated skills, then top up from the rest of the bank
+    so a full assessment is always produced.
+    """
+    skill_tokens = [s.strip().lower() for s in skills_text.split(",") if s.strip()]
+
+    def matches(question):
+        domain = question["domain"].lower()
+        return any(tok in domain or domain in tok for tok in skill_tokens)
+
+    matched = [q for q in QUESTION_BANK if matches(q)]
+    random.shuffle(matched)
+
+    if len(matched) >= count:
+        return matched[:count]
+
+    remaining_pool = [q for q in QUESTION_BANK if q not in matched]
+    random.shuffle(remaining_pool)
+    return (matched + remaining_pool)[:count]
+
+
+def generate_interview_mcqs(skills, count=25):
+    """
+    AI-first MCQ generation, validated by validate_mcqs() before being
+    accepted, with a skill-aware fallback bank if the AI is unavailable
+    or produces too few well-formed questions.
+    """
+    prompt = f"""
+You are an experienced technical interviewer designing a screening assessment.
+
+Generate EXACTLY {count} multiple-choice interview questions strictly
+scoped to these candidate skills: {skills}
+
+Rules:
+- Fixed difficulty: intermediate (not beginner trivia, not expert-only edge cases).
+- Every question has exactly 4 options (A, B, C, D) with exactly one correct answer.
+- Do not repeat questions or ask near-duplicates of each other.
+- Do not ask about topics outside the given skills.
+- Avoid ambiguous wording - there must be exactly one unambiguous correct answer.
+
+Return ONLY a valid JSON ARRAY, no commentary, in this exact format:
 [
   {{
     "q": "Question",
@@ -502,27 +639,24 @@ FORMAT:
     "answer": "A"
   }}
 ]
-
-Generate exactly 25 interview MCQs based on:
-{skills}
 """
 
     for attempt in range(2):
         try:
-            text = ai_client.chat_complete(prompt, retries=1)
-            mcqs = extract_json_flexible(text)
+            text = ai_client.chat_complete(prompt, retries=1, max_tokens=12000)
+            mcqs = validate_mcqs(extract_json_flexible(text))
 
-            if mcqs and isinstance(mcqs, list) and len(mcqs) >= 25:
+            if len(mcqs) >= count:
                 st.session_state.ai_used = True
-                return mcqs[:25]
+                return mcqs[:count]
 
         except Exception as e:
             print(f"[AI ERROR] Attempt {attempt+1}:", e)
 
-    # FALLBACK (UNCHANGED)
-    st.warning("⚠️ AI service temporarily unavailable. Using curated question bank.")
+    # FALLBACK - skill-aware, not fully random
+    st.warning("⚠️ AI service temporarily unavailable. Using curated questions matched to your skills.")
     st.session_state.ai_used = False
-    return random.sample(QUESTION_BANK, 25)
+    return get_fallback_mcqs(skills, count=count)
 
 
 # =====================================================
@@ -575,20 +709,27 @@ SkillGauge AI Team
         return False
 
 # =====================================================
-# SAVE RESULT
+# EXCEL EXPORT (backup/export only - MySQL is the source of truth)
 # =====================================================
-def save_to_excel(email, score):
-    if not os.path.exists(EXCEL_PATH):
-        wb = Workbook()
-        ws = wb.active
-        ws.append(["Email", "Score", "Max Marks", "Date", "Time"])
-        wb.save(EXCEL_PATH)
+def export_excel_from_db():
+    """Regenerate the Excel file from the latest DB records and return its path.
+    Called on demand (admin dashboard), never as the write path for a result."""
+    rows = db.get_all_assessments()
 
-    wb = load_workbook(EXCEL_PATH)
+    wb = Workbook()
     ws = wb.active
-    now = datetime.now()
-    ws.append([email, score, 25, now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")])
+    ws.append(["Email", "Score", "Max Marks", "Date", "Time"])
+    for row in rows:
+        completed_at = row["completed_at"]
+        ws.append([
+            row["email"],
+            row["score"],
+            row["max_score"],
+            completed_at.strftime("%Y-%m-%d") if completed_at else "",
+            completed_at.strftime("%H:%M:%S") if completed_at else "",
+        ])
     wb.save(EXCEL_PATH)
+    return EXCEL_PATH
 
 # =====================================================
 # PDF GENERATION
@@ -630,9 +771,10 @@ def generate_pdf(email, mcqs, answers, score):
         
         story.append(Spacer(1, 6))
 
+    total_questions = len(mcqs)
     story.append(Spacer(1, 12))
-    story.append(Paragraph(f"<b>FINAL SCORE: {score}/25</b>", styles["Normal"]))
-    percentage = (score / 25) * 100
+    story.append(Paragraph(f"<b>FINAL SCORE: {score}/{total_questions}</b>", styles["Normal"]))
+    percentage = (score / total_questions) * 100 if total_questions else 0
     story.append(Paragraph(f"<b>Percentage: {percentage:.1f}%</b>", styles["Normal"]))
 
     doc.build(story)
@@ -686,12 +828,18 @@ if st.session_state.step == "admin_login":
 elif st.session_state.step == "admin_dashboard":
     st.markdown("## 📊 Admin Dashboard")
     st.markdown("---")
-    
-    if not os.path.exists(EXCEL_PATH):
+
+    rows = db.get_all_assessments()
+
+    if not rows:
         st.warning("⚠️ No assessment data yet.")
     else:
-        df = pd.read_excel(EXCEL_PATH)
-        
+        df = pd.DataFrame(rows)
+        df["Date"] = df["completed_at"].apply(lambda d: d.strftime("%Y-%m-%d") if d else "")
+        df["Time"] = df["completed_at"].apply(lambda d: d.strftime("%H:%M:%S") if d else "")
+        df = df.rename(columns={"email": "Email", "score": "Score", "max_score": "Max Marks"})
+        df = df[["Email", "Score", "Max Marks", "Date", "Time"]]
+
         # Summary Metrics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -711,15 +859,17 @@ elif st.session_state.step == "admin_dashboard":
         
         st.markdown("---")
         
-        # Download Button
-        with open(EXCEL_PATH, "rb") as f:
+        # Download Button - regenerate the Excel export fresh from the DB
+        # every time, so it never drifts from the source of truth
+        excel_path = export_excel_from_db()
+        with open(excel_path, "rb") as f:
             st.download_button(
                 label="📥 Download Excel Report",
                 data=f.read(),
                 file_name="student_scores.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
-            )   
+            )
         
         st.markdown("---")
         
@@ -728,7 +878,9 @@ elif st.session_state.step == "admin_dashboard":
         email = st.selectbox("Select Student Email", df["Email"].unique())
         
         if email:
-            latest = df[df["Email"] == email].iloc[-1]
+            # rows come from the DB ordered newest-first, so the latest
+            # attempt for this email is the first match, not the last
+            latest = df[df["Email"] == email].iloc[0]
             
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -837,83 +989,152 @@ elif st.session_state.step == 0:
                 elif not email.strip():
                     st.error("❌ Please enter your email address.")
                 else:
-                    with st.spinner("🤖 Generating interview questions..."):
-                        mcqs = generate_interview_mcqs(skills)
-                    
-                    if not mcqs:
-                        st.error("❌ Failed to generate questions. Please retry.")
-                    else:
-                        st.session_state.mcqs = mcqs
-                        ai_status = "🤖 AI-Generated" if st.session_state.ai_used else "📚 Curated Questions"
-                        st.success(f"✅ Questions ready! ({ai_status})")
+                    source = "resume" if method == "📄 Upload Resume (PDF)" else "manual"
+                    user_id = db.get_or_create_user(email.strip())
+                    categorized = categorize_skills(skills)
+                    db.add_categorized_skills(user_id, categorized, source=source)
+                    st.session_state.user_id = user_id
+                    st.session_state.email = email.strip()
+
+                    # Session resilience (Q6): if this candidate already has an
+                    # in-progress attempt (page refresh, dropped connection),
+                    # resume it instead of generating a fresh set of questions.
+                    existing = db.get_in_progress_assessment(user_id)
+                    if existing:
+                        st.session_state.assessment_id = existing["id"]
+                        st.session_state.mcqs = json.loads(existing["questions_json"])
+                        st.session_state.answers = {
+                            int(k): v for k, v in json.loads(existing["responses_json"] or "{}").items()
+                        }
+                        st.session_state.ai_used = bool(existing["ai_generated"])
+                        st.session_state.skills_snapshot = existing["skills_snapshot"] or skills.strip()
+                        st.session_state.assessment_start_time = existing["started_at"].timestamp()
+                        st.session_state.assessment_time_limit = len(st.session_state.mcqs) * 60
+                        st.session_state.current_question = min(
+                            len(st.session_state.answers), len(st.session_state.mcqs) - 1
+                        )
+                        st.info("↻ Resuming your in-progress assessment.")
                         st.session_state.step = 1
                         st.rerun()
+                    else:
+                        st.session_state.skills_snapshot = skills.strip()
+                        with st.spinner("🤖 Generating interview questions..."):
+                            mcqs = generate_interview_mcqs(skills)
+
+                        if not mcqs:
+                            st.error("❌ Failed to generate questions. Please retry.")
+                        else:
+                            st.session_state.mcqs = mcqs
+                            st.session_state.assessment_id = db.start_assessment(
+                                user_id=user_id,
+                                skills_snapshot=skills.strip(),
+                                mcqs=mcqs,
+                                ai_generated=st.session_state.ai_used,
+                            )
+                            st.session_state.assessment_start_time = time.time()
+                            st.session_state.assessment_time_limit = len(mcqs) * 60
+                            st.session_state.current_question = 0
+                            ai_status = "🤖 AI-Generated" if st.session_state.ai_used else "📚 Curated Questions"
+                            st.success(f"✅ Questions ready! ({ai_status})")
+                            st.session_state.step = 1
+                            st.rerun()
         
         with col2:
             st.info("💡 Tip: More specific skills lead to better interview questions!")
 
 # =====================================================
-# STUDENT FLOW - STEP 1: MCQ Assessment
+# STUDENT FLOW - STEP 1: MCQ Assessment (one question at a time, timed)
 # =====================================================
 elif st.session_state.step == 1:
-    st.markdown("## 📝 Interview Assessment")
-    st.markdown(f"**Total Questions:** {len(st.session_state.mcqs)}")
-    ai_status = "🤖 AI-Generated" if st.session_state.ai_used else "📚 Curated Questions"
-    st.markdown(f"**Question Source:** {ai_status}")
-    st.markdown("---")
-    
-    progress = 0
-    for i, q in enumerate(st.session_state.mcqs, 1):
-        with st.container():
-            # Progress indicator
-            progress_percent = (i / len(st.session_state.mcqs)) * 100
-            st.progress(progress_percent / 100)
-            
-            # Question number and text
-            st.markdown(f"### Question {i} of {len(st.session_state.mcqs)}")
-            st.markdown(f"**{q['q']}**", unsafe_allow_html=True)
-            
-            # Options
-            options_list = list(q["options"].keys())
-            default_index = 0
-            if i in st.session_state.answers:
-                try:
-                    default_index = options_list.index(st.session_state.answers[i])
-                except:
-                    default_index = 0
-            
-            selected = st.radio(
-                "Select your answer:",
-                options_list,
-                format_func=lambda x: f"{x}) {q['options'][x]}",
-                index=default_index,
-                key=f"q{i}",
-                horizontal=False
-            )
-            st.session_state.answers[i] = selected
-            st.markdown("---")
-    
-    # Submit Button
-    if st.button("✓ Submit Assessment", use_container_width=True):
+    total_questions = len(st.session_state.mcqs)
+    idx = min(st.session_state.current_question, total_questions - 1)
+
+    # --- Timer: auto-submit once time is up ---
+    elapsed = time.time() - st.session_state.assessment_start_time
+    remaining = st.session_state.assessment_time_limit - elapsed
+    if remaining <= 0:
         st.session_state.step = 2
         st.rerun()
+    minutes, seconds = divmod(max(0, int(remaining)), 60)
+
+    st.markdown("## 📝 Interview Assessment")
+    top_col1, top_col2, top_col3 = st.columns(3)
+    with top_col1:
+        st.metric("Question", f"{idx + 1} of {total_questions}")
+    with top_col2:
+        ai_status = "🤖 AI-Generated" if st.session_state.ai_used else "📚 Curated Questions"
+        st.metric("Source", ai_status)
+    with top_col3:
+        st.metric("Time Remaining", f"{minutes:02d}:{seconds:02d}")
+
+    st.progress((idx + 1) / total_questions)
+    st.markdown("---")
+
+    q = st.session_state.mcqs[idx]
+    st.markdown(f"### {q['q']}")
+
+    options_list = list(q["options"].keys())
+    current_answer = st.session_state.answers.get(idx + 1)
+    default_index = options_list.index(current_answer) if current_answer in options_list else None
+
+    selected = st.radio(
+        "Select your answer:",
+        options_list,
+        format_func=lambda x: f"{x}) {q['options'][x]}",
+        index=default_index,
+        key=f"q_radio_{idx}",
+        horizontal=False,
+    )
+    if selected is not None and st.session_state.answers.get(idx + 1) != selected:
+        st.session_state.answers[idx + 1] = selected
+        # Persist progress immediately - this is what makes a refresh or
+        # dropped connection recoverable (Q6).
+        db.update_assessment_responses(st.session_state.assessment_id, st.session_state.answers)
+
+    st.markdown("---")
+    nav_col1, nav_col2, nav_col3 = st.columns(3)
+    with nav_col1:
+        if st.button("⬅ Previous", use_container_width=True, disabled=(idx == 0)):
+            st.session_state.current_question = idx - 1
+            st.rerun()
+    with nav_col2:
+        if idx < total_questions - 1:
+            if st.button("Next ➡", use_container_width=True):
+                st.session_state.current_question = idx + 1
+                st.rerun()
+    with nav_col3:
+        if st.button("✓ Submit Assessment", use_container_width=True):
+            st.session_state.step = 2
+            st.rerun()
 
 # =====================================================
 # STUDENT FLOW - STEP 2: Results
 # =====================================================
 elif st.session_state.step == 2:
+    total_questions = len(st.session_state.mcqs)
     score = sum(
         1 for i, q in enumerate(st.session_state.mcqs, 1)
         if st.session_state.answers.get(i) == q["answer"]
     )
-    
-    percentage = (score / 25) * 100
-    
+
+    percentage = (score / total_questions) * 100 if total_questions else 0
+
     pdf = generate_pdf(st.session_state.email, st.session_state.mcqs, st.session_state.answers, score)
-    save_to_excel(st.session_state.email, score)
-    
+
     # Try to send email
     email_sent = send_email_report(st.session_state.email, pdf)
+
+    # The assessment row already exists (created 'in_progress' when
+    # questions were generated) - finalize it rather than inserting a new
+    # one, so a submit after a resumed session updates the same record.
+    if not st.session_state.get("saved_to_db"):
+        db.complete_assessment(st.session_state.assessment_id, score=score, max_score=total_questions)
+        db.save_report(
+            st.session_state.assessment_id,
+            pdf_path=pdf,
+            email_status="sent" if email_sent else "failed",
+        )
+        st.session_state.saved_to_db = True
     
     # Result Header
     st.markdown("## ✅ Assessment Complete!")
@@ -929,7 +1150,7 @@ elif st.session_state.step == 2:
     # Score Display
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Your Score", f"{score}/25")
+        st.metric("Your Score", f"{score}/{total_questions}")
     with col2:
         st.metric("Percentage", f"{percentage:.1f}%")
     with col3:
@@ -953,7 +1174,7 @@ elif st.session_state.step == 2:
         ax.patch.set_alpha(0)
         colors = ['#10b981', '#ef4444']
         wedges, texts, autotexts = ax.pie(
-            [score, 25 - score],
+            [score, total_questions - score],
             labels=["✓ Correct", "✗ Wrong"],
             autopct="%1.1f%%",
             startangle=90,
@@ -1005,4 +1226,7 @@ elif st.session_state.step == 2:
         st.session_state.answers = {}
         st.session_state.score = 0
         st.session_state.ai_used = False
+        st.session_state.user_id = None
+        st.session_state.skills_snapshot = ""
+        st.session_state.saved_to_db = False
         st.rerun()
