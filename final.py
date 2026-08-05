@@ -521,8 +521,7 @@ if "step" not in st.session_state:
         "assessment_id": None,
         "assessment_start_time": None,
         "recommendations": None,
-        # Recomputed per attempt as question_count * ASSESSMENT_SECONDS_PER_QUESTION
-        "assessment_time_limit": 1500,
+        "assessment_time_limit": config.ASSESSMENT_TOTAL_SECONDS,
         "current_question": 0,
     })
 
@@ -1317,9 +1316,7 @@ elif st.session_state.step == 0:
                         st.session_state.ai_used = bool(existing["ai_generated"])
                         st.session_state.skills_snapshot = existing["skills_snapshot"] or skills.strip()
                         st.session_state.assessment_start_time = existing["started_at"].timestamp()
-                        st.session_state.assessment_time_limit = (
-                            len(st.session_state.mcqs) * config.ASSESSMENT_SECONDS_PER_QUESTION
-                        )
+                        st.session_state.assessment_time_limit = config.ASSESSMENT_TOTAL_SECONDS
                         st.session_state.current_question = min(
                             len(st.session_state.answers), len(st.session_state.mcqs) - 1
                         )
@@ -1342,9 +1339,7 @@ elif st.session_state.step == 0:
                                 ai_generated=st.session_state.ai_used,
                             )
                             st.session_state.assessment_start_time = time.time()
-                            st.session_state.assessment_time_limit = (
-                                len(mcqs) * config.ASSESSMENT_SECONDS_PER_QUESTION
-                            )
+                            st.session_state.assessment_time_limit = config.ASSESSMENT_TOTAL_SECONDS
                             st.session_state.current_question = 0
                             ai_status = "🤖 AI-Generated" if st.session_state.ai_used else "📚 Curated Questions"
                             st.success(f"✅ Questions ready! ({ai_status})")

@@ -37,9 +37,12 @@ RECRUITER_PASSWORD = os.environ.get("RECRUITER_PASSWORD", "recruiter123")
 # =====================================================
 # ASSESSMENT
 # =====================================================
-# Total time limit = question count x this. Configurable so the duration
-# can be tuned per cohort without a code change.
-ASSESSMENT_SECONDS_PER_QUESTION = int(os.environ.get("ASSESSMENT_SECONDS_PER_QUESTION", "60"))
+# Total time allowed for one assessment, in minutes. A flat total (rather
+# than a per-question multiplier) is what candidates are actually told -
+# "you have 30 minutes" - and it stays predictable if the question count
+# ever changes.
+ASSESSMENT_TOTAL_MINUTES = int(os.environ.get("ASSESSMENT_TOTAL_MINUTES", "30"))
+ASSESSMENT_TOTAL_SECONDS = ASSESSMENT_TOTAL_MINUTES * 60
 
 # =====================================================
 # MYSQL
