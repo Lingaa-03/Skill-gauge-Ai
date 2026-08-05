@@ -11,5 +11,8 @@ venv/
 *.db
 *.sqlite3
 
-# Generated on demand from the DB - not source data
+# Generated at runtime, not source data. Candidate reports are recreated
+# from the DB whenever they're needed, so they don't belong in git.
 results/skillgauge_export.xlsx
+pdf_reports/*.pdf
+!pdf_reports/.gitkeep
