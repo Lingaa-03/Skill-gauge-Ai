@@ -14,7 +14,9 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import inch
 
 from openpyxl import Workbook, load_workbook
-from google import genai
+
+import config
+from services import ai_client
 
 # =====================================================
 # PAGE CONFIG & STYLING
@@ -110,27 +112,17 @@ label,
 """, unsafe_allow_html=True)
 
 # =====================================================
-# PATHS
+# PATHS (from config.py, which reads .env)
 # =====================================================
-RESULT_DIR = "results"
-PDF_DIR = "pdf_reports"
-EXCEL_PATH = os.path.join(RESULT_DIR, "student_scores.xlsx")
-
-os.makedirs(RESULT_DIR, exist_ok=True)
-os.makedirs(PDF_DIR, exist_ok=True)
+RESULT_DIR = config.RESULT_DIR
+PDF_DIR = config.PDF_DIR
+EXCEL_PATH = config.EXCEL_PATH
 
 # =====================================================
-# GEMINI CONFIG
+# EMAIL CONFIG (from config.py, which reads .env)
 # =====================================================
-# client = genai.Client(api_key="AIzaSyCS9x37uOK1CJkgrBnDdeU93OEjUDtLtwE")
-# AIzaSyA167FYg2wh7EXEcIBK2KYkXp0pD7cx1Mk
-MODEL_NAME = "models/gemini-flash-latest"
-
-# =====================================================
-# EMAIL CONFIG
-# =====================================================
-SENDER_EMAIL = "noreply.civicconnect@gmail.com"
-APP_PASSWORD = "hvpwfvoouycoaqgo"
+SENDER_EMAIL = config.SENDER_EMAIL
+APP_PASSWORD = config.EMAIL_APP_PASSWORD
 
 # =====================================================
 # FALLBACK QUESTION BANK (50 Questions - 25 Random Selected if AI Fails)
@@ -483,9 +475,9 @@ Resume:
 {text[:6000]}
 """
     try:
-        res = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-        return res.text.strip()
-    except:
+        return ai_client.chat_complete(prompt).strip()
+    except Exception as e:
+        print(f"[SKILL EXTRACTION ERROR]: {e}")
         st.warning("⚠️ AI unavailable. Please enter skills manually.")
         return ""
 
@@ -517,12 +509,8 @@ Generate exactly 25 interview MCQs based on:
 
     for attempt in range(2):
         try:
-            res = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=prompt
-            )
-
-            mcqs = extract_json_flexible(res.text)
+            text = ai_client.chat_complete(prompt, retries=1)
+            mcqs = extract_json_flexible(text)
 
             if mcqs and isinstance(mcqs, list) and len(mcqs) >= 25:
                 st.session_state.ai_used = True
@@ -680,7 +668,7 @@ if st.session_state.step == "admin_login":
             col_login, col_back = st.columns(2)
             with col_login:
                 if st.button("✓ Login", use_container_width=True):
-                    if username == "admin" and password == "admin123":
+                    if username == config.ADMIN_USERNAME and password == config.ADMIN_PASSWORD:
                         st.session_state.admin_logged = True
                         st.session_state.step = "admin_dashboard"
                         st.rerun()
