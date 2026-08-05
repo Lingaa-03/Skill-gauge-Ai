@@ -10,3 +10,6 @@ venv/
 # Local DB
 *.db
 *.sqlite3
+
+# Generated on demand from the DB - not source data
+results/skillgauge_export.xlsx

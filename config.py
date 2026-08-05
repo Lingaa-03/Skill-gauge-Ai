@@ -30,6 +30,10 @@ EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
+# Recruiter account - same dashboard, read-only (no exports/system view).
+RECRUITER_USERNAME = os.environ.get("RECRUITER_USERNAME", "recruiter")
+RECRUITER_PASSWORD = os.environ.get("RECRUITER_PASSWORD", "recruiter123")
+
 # =====================================================
 # MYSQL
 # =====================================================
@@ -44,7 +48,10 @@ MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "")
 # =====================================================
 RESULT_DIR = "results"
 PDF_DIR = "pdf_reports"
-EXCEL_PATH = os.path.join(RESULT_DIR, "student_scores.xlsx")
+# Generated on demand from the DB by export_excel_from_db(). Kept separate
+# from any hand-maintained/historical spreadsheet in results/ so a download
+# never overwrites data the DB isn't the source of truth for.
+EXCEL_PATH = os.path.join(RESULT_DIR, "skillgauge_export.xlsx")
 
 os.makedirs(RESULT_DIR, exist_ok=True)
 os.makedirs(PDF_DIR, exist_ok=True)

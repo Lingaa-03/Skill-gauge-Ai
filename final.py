@@ -122,6 +122,9 @@ def _init_db_once():
     # Seed the admin account from .env on first run only - this never
     # overwrites a password that's already been set.
     db.create_account_if_missing(config.ADMIN_USERNAME, config.ADMIN_PASSWORD, role="admin")
+    db.create_account_if_missing(
+        config.RECRUITER_USERNAME, config.RECRUITER_PASSWORD, role="recruiter"
+    )
     # Seed the jobs/mentors/learning catalog the matching engine ranks against.
     db.seed_marketplace_data()
     return True
@@ -721,20 +724,40 @@ SkillGauge AI Team
 def export_excel_from_db():
     """Regenerate the Excel file from the latest DB records and return its path.
     Called on demand (admin dashboard), never as the write path for a result."""
-    rows = db.get_all_assessments()
+    rows = db.get_all_assessments_detailed()
 
     wb = Workbook()
     ws = wb.active
-    ws.append(["Email", "Score", "Max Marks", "Date", "Time"])
+    ws.title = "Assessments"
+    ws.append([
+        "Email", "Name", "Assessment ID", "Skills", "Score", "Max Marks",
+        "Accuracy %", "Question Source", "Status", "Started", "Completed",
+        "Report Path", "Email Status",
+    ])
     for row in rows:
-        completed_at = row["completed_at"]
+        started, completed = row["started_at"], row["completed_at"]
         ws.append([
             row["email"],
+            row["name"] or "",
+            row["assessment_id"],
+            row["skills_snapshot"] or "",
             row["score"],
             row["max_score"],
-            completed_at.strftime("%Y-%m-%d") if completed_at else "",
-            completed_at.strftime("%H:%M:%S") if completed_at else "",
+            float(row["accuracy"]) if row["accuracy"] is not None else 0.0,
+            "AI-Generated" if row["ai_generated"] else "Curated Fallback",
+            row["completion_status"],
+            started.strftime("%Y-%m-%d %H:%M:%S") if started else "",
+            completed.strftime("%Y-%m-%d %H:%M:%S") if completed else "",
+            row["pdf_path"] or "",
+            row["email_status"] or "",
         ])
+
+    # Second sheet: the skill-demand view of the talent pool
+    ws_skills = wb.create_sheet("Skill Demand")
+    ws_skills.append(["Skill", "Category", "Candidate Count"])
+    for skill in db.get_skill_demand(limit=100):
+        ws_skills.append([skill["skill_name"], skill["category"], skill["candidate_count"]])
+
     wb.save(EXCEL_PATH)
     return EXCEL_PATH
 
@@ -835,7 +858,11 @@ if st.session_state.step == "admin_login":
 # ADMIN DASHBOARD
 # =====================================================
 elif st.session_state.step == "admin_dashboard":
-    st.markdown("## 📊 Admin Dashboard")
+    role = st.session_state.admin_role or "recruiter"
+    is_admin = role == "admin"
+
+    st.markdown(f"## 📊 {'Admin' if is_admin else 'Recruiter'} Dashboard")
+    st.caption(f"Signed in as **{role}**" + ("" if is_admin else " — read-only access"))
     st.markdown("---")
 
     rows = db.get_all_assessments()
@@ -843,92 +870,209 @@ elif st.session_state.step == "admin_dashboard":
     if not rows:
         st.warning("⚠️ No assessment data yet.")
     else:
+        stats = db.get_dashboard_stats()
+
         df = pd.DataFrame(rows)
         df["Date"] = df["completed_at"].apply(lambda d: d.strftime("%Y-%m-%d") if d else "")
         df["Time"] = df["completed_at"].apply(lambda d: d.strftime("%H:%M:%S") if d else "")
+        df["Accuracy %"] = df["accuracy"].apply(lambda a: float(a) if a is not None else 0.0)
+        df["Source"] = df["ai_generated"].apply(lambda v: "AI" if v else "Fallback")
         df = df.rename(columns={"email": "Email", "score": "Score", "max_score": "Max Marks"})
-        df = df[["Email", "Score", "Max Marks", "Date", "Time"]]
+        df = df[["Email", "Score", "Max Marks", "Accuracy %", "Source", "Date", "Time"]]
 
-        # Summary Metrics
+        # --- Headline metrics (accuracy-based, so a variable question
+        # count doesn't break the numbers the way a hardcoded /25 did) ---
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Assessments", len(df))
+            st.metric("Total Assessments", stats["total_assessments"])
         with col2:
-            st.metric("Avg Score", f"{df['Score'].mean():.1f}/25")
+            st.metric("Unique Candidates", stats["unique_candidates"])
         with col3:
-            st.metric("Highest Score", f"{df['Score'].max()}/25")
+            avg = stats["avg_accuracy"]
+            st.metric("Avg Accuracy", f"{avg:.1f}%" if avg is not None else "—")
         with col4:
-            st.metric("Lowest Score", f"{df['Score'].min()}/25")
-        
-        st.markdown("---")
-        
-        # Data Table
-        st.subheader("📋 Assessment Records")
-        st.dataframe(df, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # Download Button - regenerate the Excel export fresh from the DB
-        # every time, so it never drifts from the source of truth
-        excel_path = export_excel_from_db()
-        with open(excel_path, "rb") as f:
-            st.download_button(
-                label="📥 Download Excel Report",
-                data=f.read(),
-                file_name="student_scores.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+            total = stats["total_assessments"]
+            st.metric(
+                "Pass Rate (≥60%)",
+                f"{(stats['passed_count'] / total * 100):.0f}%" if total else "—",
             )
-        
+
+        col5, col6, col7, col8 = st.columns(4)
+        with col5:
+            best = stats["best_accuracy"]
+            st.metric("Best", f"{best:.1f}%" if best is not None else "—")
+        with col6:
+            worst = stats["worst_accuracy"]
+            st.metric("Lowest", f"{worst:.1f}%" if worst is not None else "—")
+        with col7:
+            st.metric("AI-Generated", stats["ai_generated_count"])
+        with col8:
+            st.metric("Fallback Used", stats["fallback_count"])
+
+        if stats["abandoned"]:
+            st.info(f"↻ {stats['abandoned']} assessment(s) currently in progress / abandoned.")
+
         st.markdown("---")
-        
-        # Individual Analysis
-        st.subheader("📈 Student Performance Analysis")
-        email = st.selectbox("Select Student Email", df["Email"].unique())
-        
-        if email:
-            # rows come from the DB ordered newest-first, so the latest
-            # attempt for this email is the first match, not the last
-            latest = df[df["Email"] == email].iloc[0]
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Score", f"{int(latest['Score'])}/25")
-            with col2:
-                percentage = (latest['Score'] / 25) * 100
-                st.metric("Percentage", f"{percentage:.1f}%")
-            with col3:
-                st.metric("Assessment Date", latest['Date'])
-            
-            # Pie Chart - Smaller Size
-            fig, ax = plt.subplots(figsize=(4, 3))
-            fig.patch.set_alpha(0)
-            ax.patch.set_alpha(0)
-            colors = ['#10b981', '#ef4444']
-            wedges, texts, autotexts = ax.pie(
-                [latest["Score"], 25 - latest["Score"]],
-                labels=["✓ Correct", "✗ Wrong"],
-                autopct="%1.1f%%",
-                startangle=90,
-                colors=colors,
-                explode=(0.05, 0.05),
-                shadow=False,
-                textprops={'fontsize': 10, 'weight': 'bold', 'color': 'white'}
-            )
-            for autotext in autotexts:
-                autotext.set_color('white')
-                autotext.set_fontsize(10)
-            ax.axis("equal")
-            st.pyplot(fig, use_container_width=False)
-        
+
+        tab_records, tab_analytics, tab_candidate = st.tabs([
+            "📋 Records", "📈 Analytics", "🔍 Candidate Detail",
+        ])
+
+        with tab_records:
+            st.dataframe(df, use_container_width=True)
+
+            if is_admin:
+                # Regenerate the Excel export fresh from the DB every time,
+                # so it never drifts from the source of truth.
+                excel_path = export_excel_from_db()
+                with open(excel_path, "rb") as f:
+                    st.download_button(
+                        label="📥 Download Full Excel Report",
+                        data=f.read(),
+                        file_name="skillgauge_assessments.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+            else:
+                st.caption("🔒 Excel export is restricted to admin accounts.")
+
+        with tab_analytics:
+            col_a, col_b = st.columns(2)
+
+            with col_a:
+                st.subheader("Score Distribution")
+                buckets = db.get_score_distribution()
+                if buckets:
+                    order = ["0-19%", "20-39%", "40-59%", "60-79%", "80-100%"]
+                    counts = {b["bucket"]: b["count"] for b in buckets}
+                    labels = [b for b in order if b in counts]
+                    values = [counts[b] for b in labels]
+
+                    fig, ax = plt.subplots(figsize=(4.5, 3))
+                    fig.patch.set_alpha(0)
+                    ax.patch.set_alpha(0)
+                    ax.bar(labels, values, color="#6366f1")
+                    ax.set_ylabel("Candidates", color="white")
+                    ax.tick_params(colors="white", labelsize=8)
+                    for spine in ax.spines.values():
+                        spine.set_color("white")
+                    st.pyplot(fig, use_container_width=False)
+                else:
+                    st.info("Not enough data yet.")
+
+            with col_b:
+                st.subheader("Question Source Split")
+                ai_count = stats["ai_generated_count"]
+                fb_count = stats["fallback_count"]
+                if ai_count or fb_count:
+                    fig2, ax2 = plt.subplots(figsize=(4, 3))
+                    fig2.patch.set_alpha(0)
+                    ax2.patch.set_alpha(0)
+                    ax2.pie(
+                        [ai_count, fb_count],
+                        labels=["AI-Generated", "Fallback"],
+                        autopct="%1.0f%%",
+                        colors=["#10b981", "#f59e0b"],
+                        textprops={"fontsize": 9, "weight": "bold", "color": "white"},
+                    )
+                    ax2.axis("equal")
+                    st.pyplot(fig2, use_container_width=False)
+                else:
+                    st.info("Not enough data yet.")
+
+            st.markdown("---")
+            st.subheader("🧠 Talent Pool Skill Demand")
+            st.caption("What skills the candidate pool actually brings — useful for planning roles and training.")
+            skill_rows = db.get_skill_demand(limit=12)
+            if skill_rows:
+                skill_df = pd.DataFrame(skill_rows).rename(columns={
+                    "skill_name": "Skill",
+                    "category": "Category",
+                    "candidate_count": "Candidates",
+                })
+                st.dataframe(skill_df, use_container_width=True)
+            else:
+                st.info("No skills recorded yet.")
+
+        with tab_candidate:
+            st.subheader("🔍 Candidate Detail")
+            email = st.selectbox("Select Candidate", df["Email"].unique())
+
+            if email:
+                detail = db.get_candidate_detail(email)
+                if not detail:
+                    st.warning("Candidate not found.")
+                else:
+                    user = detail["user"]
+                    st.markdown(f"**Email:** {user['email']}")
+                    if user["name"]:
+                        st.markdown(f"**Name:** {user['name']}")
+                    st.markdown(f"**First seen:** {user['created_at'].strftime('%Y-%m-%d %H:%M')}")
+
+                    st.markdown("#### Skills on Profile")
+                    if detail["skills"]:
+                        skills_df = pd.DataFrame(detail["skills"]).rename(columns={
+                            "skill_name": "Skill",
+                            "category": "Category",
+                            "source": "Source",
+                            "created_at": "Added",
+                        })
+                        st.dataframe(skills_df, use_container_width=True)
+                    else:
+                        st.info("No skills recorded.")
+
+                    st.markdown("#### Assessment History")
+                    for att in detail["assessments"]:
+                        acc = float(att["accuracy"]) if att["accuracy"] is not None else 0.0
+                        status_icon = "✅" if att["completion_status"] == "completed" else "↻"
+                        started = att["started_at"].strftime("%Y-%m-%d %H:%M") if att["started_at"] else "—"
+                        st.markdown(
+                            f"{status_icon} **Attempt #{att['id']}** — {att['score']}/{att['max_score']} "
+                            f"({acc:.1f}%) · {'AI' if att['ai_generated'] else 'Fallback'} · "
+                            f"{att['completion_status']} · started {started}"
+                        )
+                        if att["email_status"]:
+                            mail_icon = {"sent": "📧 sent", "failed": "⚠️ failed"}.get(
+                                att["email_status"], att["email_status"]
+                            )
+                            st.caption(f"Report: {mail_icon}")
+                        if att["pdf_path"] and os.path.exists(att["pdf_path"]):
+                            with open(att["pdf_path"], "rb") as pf:
+                                st.download_button(
+                                    "📄 Download this report",
+                                    data=pf.read(),
+                                    file_name=os.path.basename(att["pdf_path"]),
+                                    mime="application/pdf",
+                                    key=f"dl_report_{att['id']}",
+                                )
+                        elif att["pdf_path"]:
+                            st.caption("📄 Report file no longer on disk.")
+
+                    # Reuse the Phase 5 engine so a recruiter sees the same
+                    # matches the candidate does - useful for a screening call.
+                    st.markdown("#### Marketplace Fit")
+                    if st.button("🎯 Compute role matches for this candidate", key=f"match_{user['id']}"):
+                        with st.spinner("Matching..."):
+                            candidate_recs = matching_engine.get_recommendations(user["id"])
+                        for job in candidate_recs["external_jobs"][:3]:
+                            st.markdown(
+                                f"- **{job['title']}** — {job['match_percent']}% "
+                                f"(gaps: {', '.join(job['missing_skills']) or 'none'})"
+                            )
+                        for job in candidate_recs["internal_jobs"][:2]:
+                            st.markdown(
+                                f"- 🔄 **{job['title']}** — {job['match_percent']}% "
+                                f"(gaps: {', '.join(job['missing_skills']) or 'none'})"
+                            )
+
         st.markdown("---")
-        
-        # Logout Button
-        if st.button("🚪 Logout", use_container_width=True):
-            st.session_state.step = 0
-            st.session_state.admin_logged = False
-            st.session_state.admin_role = None
-            st.rerun()
+
+    # Logout is available whether or not there's data
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state.step = 0
+        st.session_state.admin_logged = False
+        st.session_state.admin_role = None
+        st.rerun()
 
 # =====================================================
 # STUDENT FLOW - STEP 0: Input

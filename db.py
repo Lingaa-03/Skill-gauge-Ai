@@ -461,6 +461,169 @@ def get_assessments_for_email(email):
 
 
 # =====================================================
+# DASHBOARD ANALYTICS (Phase 6)
+# =====================================================
+def get_dashboard_stats():
+    """Aggregate stats across all completed assessments. Computed in SQL
+    rather than in pandas so it stays correct as the dataset grows.
+
+    MySQL returns COUNT/SUM/AVG as Decimal, which matplotlib refuses to
+    plot (np.isfinite can't handle Decimal). Everything is normalized to
+    plain int/float here so callers never have to think about it."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """SELECT
+                 COUNT(*)                        AS total_assessments,
+                 COUNT(DISTINCT user_id)         AS unique_candidates,
+                 AVG(accuracy)                   AS avg_accuracy,
+                 MAX(accuracy)                   AS best_accuracy,
+                 MIN(accuracy)                   AS worst_accuracy,
+                 SUM(ai_generated = 1)           AS ai_generated_count,
+                 SUM(ai_generated = 0)           AS fallback_count,
+                 SUM(accuracy >= 60)             AS passed_count
+               FROM assessments
+               WHERE completion_status = 'completed'"""
+        )
+        raw = cursor.fetchone() or {}
+
+        cursor.execute(
+            """SELECT COUNT(*) AS abandoned
+               FROM assessments WHERE completion_status = 'in_progress'"""
+        )
+        raw["abandoned"] = (cursor.fetchone() or {}).get("abandoned", 0)
+        cursor.close()
+    finally:
+        conn.close()
+
+    int_fields = (
+        "total_assessments", "unique_candidates", "ai_generated_count",
+        "fallback_count", "passed_count", "abandoned",
+    )
+    float_fields = ("avg_accuracy", "best_accuracy", "worst_accuracy")
+
+    stats = {}
+    for key in int_fields:
+        stats[key] = int(raw.get(key) or 0)
+    for key in float_fields:
+        value = raw.get(key)
+        stats[key] = float(value) if value is not None else None
+    return stats
+
+
+def get_skill_demand(limit=12):
+    """Most common skills across all candidates - shows the recruiter what
+    the incoming talent pool actually looks like."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """SELECT skill_name, category, COUNT(DISTINCT user_id) AS candidate_count
+               FROM skills
+               GROUP BY skill_name, category
+               ORDER BY candidate_count DESC, skill_name ASC
+               LIMIT %s""",
+            (limit,),
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+    finally:
+        conn.close()
+
+
+def get_score_distribution():
+    """Bucketed accuracy distribution for the cohort chart."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """SELECT
+                 CASE
+                   WHEN accuracy < 20 THEN '0-19%'
+                   WHEN accuracy < 40 THEN '20-39%'
+                   WHEN accuracy < 60 THEN '40-59%'
+                   WHEN accuracy < 80 THEN '60-79%'
+                   ELSE '80-100%'
+                 END AS bucket,
+                 COUNT(*) AS count
+               FROM assessments
+               WHERE completion_status = 'completed'
+               GROUP BY bucket"""
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        # int() for the same matplotlib/Decimal reason as get_dashboard_stats
+        return [{"bucket": r["bucket"], "count": int(r["count"])} for r in rows]
+    finally:
+        conn.close()
+
+
+def get_candidate_detail(email):
+    """Everything a recruiter needs about one candidate: identity, skills,
+    every attempt, and the report/email status for each."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("SELECT id, name, email, role, created_at FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+        if not user:
+            cursor.close()
+            return None
+
+        cursor.execute(
+            """SELECT skill_name, category, source, created_at
+               FROM skills WHERE user_id = %s ORDER BY created_at DESC""",
+            (user["id"],),
+        )
+        skills = cursor.fetchall()
+
+        cursor.execute(
+            """SELECT a.id, a.score, a.max_score, a.accuracy, a.ai_generated,
+                      a.completion_status, a.started_at, a.completed_at,
+                      a.skills_snapshot,
+                      r.pdf_path, r.email_status
+               FROM assessments a
+               LEFT JOIN reports r ON r.assessment_id = a.id
+               WHERE a.user_id = %s
+               ORDER BY a.started_at DESC""",
+            (user["id"],),
+        )
+        assessments = cursor.fetchall()
+        cursor.close()
+
+        return {"user": user, "skills": skills, "assessments": assessments}
+    finally:
+        conn.close()
+
+
+def get_all_assessments_detailed():
+    """Full export view - everything the Excel export should carry, not
+    just the five legacy columns."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """SELECT u.email, u.name, a.id AS assessment_id,
+                      a.skills_snapshot, a.score, a.max_score, a.accuracy,
+                      a.ai_generated, a.completion_status,
+                      a.started_at, a.completed_at,
+                      r.pdf_path, r.email_status
+               FROM assessments a
+               JOIN users u ON u.id = a.user_id
+               LEFT JOIN reports r ON r.assessment_id = a.id
+               ORDER BY a.started_at DESC"""
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+    finally:
+        conn.close()
+
+
+# =====================================================
 # TALENT MARKETPLACE (Phase 5)
 #
 # jobs/mentors/learning_resources are seeded once (seed_marketplace_data)
