@@ -17,7 +17,7 @@ from openpyxl import Workbook
 
 import config
 import db
-from services import ai_client
+from services import ai_client, matching_engine
 
 # =====================================================
 # PAGE CONFIG & STYLING
@@ -122,6 +122,8 @@ def _init_db_once():
     # Seed the admin account from .env on first run only - this never
     # overwrites a password that's already been set.
     db.create_account_if_missing(config.ADMIN_USERNAME, config.ADMIN_PASSWORD, role="admin")
+    # Seed the jobs/mentors/learning catalog the matching engine ranks against.
+    db.seed_marketplace_data()
     return True
 
 _init_db_once()
@@ -441,6 +443,7 @@ if "step" not in st.session_state:
         "saved_to_db": False,
         "assessment_id": None,
         "assessment_start_time": None,
+        "recommendations": None,
         "assessment_time_limit": 1500,  # seconds; recomputed as len(mcqs) * 60
         "current_question": 0,
     })
@@ -1225,15 +1228,141 @@ elif st.session_state.step == 2:
         )
     
     st.markdown("---")
-    
-    # Reset Button
-    if st.button("🔄 Take Another Assessment", use_container_width=True):
-        st.session_state.step = 0
-        st.session_state.mcqs = []
-        st.session_state.answers = {}
-        st.session_state.score = 0
-        st.session_state.ai_used = False
-        st.session_state.user_id = None
-        st.session_state.skills_snapshot = ""
-        st.session_state.saved_to_db = False
-        st.rerun()
+
+    col_next1, col_next2 = st.columns(2)
+    with col_next1:
+        if st.button("🎯 View My Career Opportunities", use_container_width=True):
+            st.session_state.step = 3
+            st.rerun()
+
+    with col_next2:
+        # Reset Button
+        if st.button("🔄 Take Another Assessment", use_container_width=True):
+            st.session_state.step = 0
+            st.session_state.mcqs = []
+            st.session_state.answers = {}
+            st.session_state.score = 0
+            st.session_state.ai_used = False
+            st.session_state.user_id = None
+            st.session_state.skills_snapshot = ""
+            st.session_state.saved_to_db = False
+            st.session_state.recommendations = None
+            st.rerun()
+
+# =====================================================
+# STUDENT FLOW - STEP 3: Talent Marketplace (Phase 5)
+# Candidate-job matching, internal mobility, mentors,
+# learning suggestions, and a career path.
+# =====================================================
+elif st.session_state.step == 3:
+    st.markdown("## 🎯 Your Career Opportunities")
+    st.markdown("Matched against your validated skill profile and assessment performance.")
+    st.markdown("---")
+
+    if not st.session_state.user_id:
+        st.warning("⚠️ Complete an assessment first to see your matches.")
+    else:
+        # Cache in session state: the embedding/AI calls are the expensive
+        # part, and a rerun (tab switch, button click) shouldn't re-run them.
+        if not st.session_state.get("recommendations"):
+            with st.spinner("🔎 Matching you to roles, mentors and learning paths..."):
+                st.session_state.recommendations = matching_engine.get_recommendations(
+                    st.session_state.user_id
+                )
+
+        recs = st.session_state.recommendations
+        profile = recs["profile"]
+
+        col_p1, col_p2, col_p3 = st.columns(3)
+        with col_p1:
+            st.metric("Skills On Profile", len(profile["skills"]))
+        with col_p2:
+            st.metric("Assessment Score", f"{profile['assessment_accuracy'] * 100:.0f}%")
+        with col_p3:
+            best = recs["external_jobs"][0]["match_percent"] if recs["external_jobs"] else 0
+            st.metric("Best Role Match", f"{best:.0f}%")
+
+        st.markdown("---")
+
+        tab_jobs, tab_internal, tab_mentors, tab_learning, tab_path = st.tabs([
+            "💼 Job Matches",
+            "🔄 Internal Mobility",
+            "👥 Mentors",
+            "📚 Learning",
+            "🧭 Career Path",
+        ])
+
+        def render_jobs(jobs, empty_msg):
+            if not jobs:
+                st.info(empty_msg)
+                return
+            for job in jobs:
+                with st.container():
+                    st.markdown(f"### {job['title']}  —  {job['match_percent']}% match")
+                    st.progress(min(1.0, job["match_percent"] / 100))
+                    st.markdown(f"**Department:** {job['department']}")
+                    st.markdown(job["description"])
+                    if job["matched_skills"]:
+                        st.markdown(f"✅ **You already have:** {', '.join(job['matched_skills'])}")
+                    if job["missing_skills"]:
+                        st.markdown(f"📈 **To strengthen:** {', '.join(job['missing_skills'])}")
+                    st.markdown("---")
+
+        with tab_jobs:
+            st.markdown("#### Roles that fit your current profile")
+            render_jobs(recs["external_jobs"], "No job matches available yet.")
+
+        with tab_internal:
+            st.markdown("#### Internal moves you could grow into")
+            render_jobs(recs["internal_jobs"], "No internal mobility options available yet.")
+
+        with tab_mentors:
+            st.markdown("#### Mentors who can help you grow")
+            if not recs["mentors"]:
+                st.info("No mentors available yet.")
+            for mentor in recs["mentors"]:
+                st.markdown(f"### {mentor['name']}  —  {mentor['relevance_percent']}% relevance")
+                st.markdown(f"*{mentor['bio']}*")
+                st.markdown(f"**Expertise:** {mentor['expertise']}")
+                if mentor["shared_skills"]:
+                    st.markdown(f"🤝 **Common ground:** {', '.join(mentor['shared_skills'])}")
+                if mentor["can_teach"]:
+                    st.markdown(f"🎓 **Can teach you:** {', '.join(mentor['can_teach'])}")
+                st.markdown("---")
+
+        with tab_learning:
+            st.markdown("#### Recommended next, highest priority first")
+            if not recs["learning"]:
+                st.info("No learning resources available yet.")
+            for item in recs["learning"]:
+                badge = {3: "🔴 High", 2: "🟡 Medium", 1: "🟢 Optional"}.get(item["priority"], "")
+                st.markdown(f"### {item['title']}")
+                st.markdown(f"**Priority:** {badge}  |  **Skill:** {item['skill_tag']}")
+                st.markdown(f"_{item['reason']}_")
+                st.markdown(item["description"])
+                if item["url"]:
+                    st.markdown(f"[Open course]({item['url']})")
+                st.markdown("---")
+
+        with tab_path:
+            st.markdown("#### Your suggested career path")
+            st.markdown(recs["career_path"])
+
+        st.markdown("---")
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            if st.button("⬅ Back to Results", use_container_width=True):
+                st.session_state.step = 2
+                st.rerun()
+        with col_b2:
+            if st.button("🔄 Take Another Assessment", use_container_width=True, key="reset_from_marketplace"):
+                st.session_state.step = 0
+                st.session_state.mcqs = []
+                st.session_state.answers = {}
+                st.session_state.score = 0
+                st.session_state.ai_used = False
+                st.session_state.user_id = None
+                st.session_state.skills_snapshot = ""
+                st.session_state.saved_to_db = False
+                st.session_state.recommendations = None
+                st.rerun()

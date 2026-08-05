@@ -151,6 +151,10 @@ def init_db():
         _ensure_column(cursor, "users", "username", "username VARCHAR(100) NULL UNIQUE")
         _ensure_column(cursor, "users", "password_hash", "password_hash VARCHAR(255) NULL")
 
+        # Matching engine (Phase 5): distinguish internal mobility roles
+        # from external candidate-facing job postings.
+        _ensure_column(cursor, "jobs", "is_internal", "is_internal BOOLEAN NOT NULL DEFAULT FALSE")
+
         cursor.close()
     finally:
         conn.close()
@@ -403,6 +407,40 @@ def get_all_assessments():
         conn.close()
 
 
+def get_latest_completed_assessment(user_id):
+    """Most recent completed assessment for this user, or None."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """SELECT * FROM assessments
+               WHERE user_id = %s AND completion_status = 'completed'
+               ORDER BY completed_at DESC LIMIT 1""",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return row
+    finally:
+        conn.close()
+
+
+def get_skills_for_user(user_id):
+    """All skill rows for this user (name + category), most recent first."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT skill_name, category FROM skills WHERE user_id = %s ORDER BY created_at DESC",
+            (user_id,),
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+    finally:
+        conn.close()
+
+
 def get_assessments_for_email(email):
     conn = get_connection()
     try:
@@ -418,5 +456,158 @@ def get_assessments_for_email(email):
         rows = cursor.fetchall()
         cursor.close()
         return rows
+    finally:
+        conn.close()
+
+
+# =====================================================
+# TALENT MARKETPLACE (Phase 5)
+#
+# jobs/mentors/learning_resources are seeded once (seed_marketplace_data)
+# with a small curated catalog. Embeddings are computed lazily by
+# services/matching_engine.py and stored back via the set_*_embedding
+# functions below, so a fresh row is matchable on the next lookup
+# without needing a separate offline embedding job.
+# =====================================================
+_SEED_JOBS = [
+    # (title, description, required_skills, department, is_internal)
+    ("Backend Developer", "Build and maintain REST APIs and backend services.", "Python, SQL, REST APIs", "Engineering", False),
+    ("Data Scientist", "Analyze data and build predictive models for product decisions.", "Python, Machine Learning, SQL, Statistics", "Data", False),
+    ("Frontend Developer", "Build responsive web interfaces for customer-facing products.", "JavaScript, HTML/CSS, React", "Engineering", False),
+    ("Java Backend Engineer", "Design and build scalable Java microservices.", "Java, SQL, Spring", "Engineering", False),
+    ("Cloud Engineer", "Manage cloud infrastructure and deployment pipelines.", "AWS, Python, DevOps", "Infrastructure", False),
+    ("QA Automation Engineer", "Build automated test suites for web applications.", "Java, Python, Selenium", "Quality", False),
+    ("ML Engineer (Internal Mobility)", "Move from your current team into applied ML, productionizing models.", "Machine Learning, Python, Deep Learning", "Data", True),
+    ("Database Administrator (Internal Mobility)", "Own performance tuning and reliability for core production databases.", "SQL, Database Optimization", "Infrastructure", True),
+    ("DevOps Engineer (Internal Mobility)", "Take ownership of CI/CD pipelines and cloud reliability.", "AWS, CI/CD, Docker", "Infrastructure", True),
+    ("Full Stack Developer (Internal Mobility)", "Grow into an end-to-end role across an internal product line.", "JavaScript, Python, SQL, HTML/CSS", "Engineering", True),
+    ("Data Analyst (Internal Mobility)", "Support internal teams with dashboards and ad-hoc analysis.", "SQL, Python, Data Visualization", "Data", True),
+    ("Senior Software Engineer (Internal Mobility)", "Step up into a senior role owning system design for a core service.", "Python, System Design, SQL, Java", "Engineering", True),
+]
+
+_SEED_MENTORS = [
+    # (name, expertise, bio)
+    ("Anita Rao", "Machine Learning, Python, Statistics", "Senior Data Scientist, 8 years building ML products."),
+    ("Rahul Mehta", "AWS, DevOps, Python", "Cloud Architect specializing in scalable infrastructure."),
+    ("Sara Khan", "Java, SQL, System Design", "Backend Lead with deep experience in distributed systems."),
+    ("Vikram Nair", "JavaScript, React, HTML/CSS", "Frontend Lead focused on accessible, performant UI."),
+    ("Priya Menon", "SQL, Database Optimization", "Database Specialist for high-throughput production systems."),
+    ("Arjun Iyer", "Python, JavaScript, SQL", "Full Stack mentor supporting engineers moving across the stack."),
+]
+
+_SEED_LEARNING_RESOURCES = [
+    # (title, skill_tag, url, description)
+    # skill_tag must use the SAME vocabulary as jobs.required_skills, so
+    # that a skill gap identified from a job match can actually resolve to
+    # a resource here. Keep these aligned when adding either side.
+    ("Advanced Python for Backend Development", "Python", "https://learning.hexacorp.internal/course/advanced-python", "Deep dive into backend patterns in Python."),
+    ("Machine Learning Foundations", "Machine Learning", "https://learning.hexacorp.internal/course/ml-foundations", "Core ML concepts and applied modeling."),
+    ("SQL Performance Tuning", "SQL", "https://learning.hexacorp.internal/course/sql-tuning", "Indexing, query plans, and optimization."),
+    ("AWS Cloud Practitioner Path", "AWS", "https://learning.hexacorp.internal/course/aws-practitioner", "Foundational AWS services and architecture."),
+    ("Modern JavaScript & React", "JavaScript", "https://learning.hexacorp.internal/course/modern-js-react", "Component-driven frontend development."),
+    ("Java Spring Boot Masterclass", "Java", "https://learning.hexacorp.internal/course/spring-boot", "Building production Java services with Spring."),
+    ("HTML/CSS Responsive Design", "HTML/CSS", "https://learning.hexacorp.internal/course/responsive-design", "Layout, accessibility, and responsive patterns."),
+    ("Data Structures & System Design", "System Design", "https://learning.hexacorp.internal/course/system-design", "Designing scalable, maintainable systems."),
+    ("Statistics for Data Science", "Statistics", "https://learning.hexacorp.internal/course/stats-for-ds", "Hypothesis testing, regression, and experimental design."),
+    ("DevOps & CI/CD Essentials", "DevOps", "https://learning.hexacorp.internal/course/devops-cicd", "Pipelines, containers, and deployment automation."),
+    ("Deep Learning with Neural Networks", "Deep Learning", "https://learning.hexacorp.internal/course/deep-learning", "Neural network architectures and training."),
+    ("Data Visualization & Dashboards", "Data Visualization", "https://learning.hexacorp.internal/course/data-viz", "Building clear, effective dashboards and reports."),
+    ("Designing REST APIs", "REST APIs", "https://learning.hexacorp.internal/course/rest-apis", "API design, versioning, and documentation."),
+    ("Database Optimization Deep Dive", "Database Optimization", "https://learning.hexacorp.internal/course/db-optimization", "Advanced tuning for high-throughput databases."),
+    ("Test Automation with Selenium", "Selenium", "https://learning.hexacorp.internal/course/selenium", "Automated browser testing at scale."),
+    ("Docker & Containers in Practice", "Docker", "https://learning.hexacorp.internal/course/docker", "Containerizing and shipping applications."),
+    ("CI/CD Pipeline Engineering", "CI/CD", "https://learning.hexacorp.internal/course/cicd-pipelines", "Designing reliable build and release pipelines."),
+    ("Spring Framework Essentials", "Spring", "https://learning.hexacorp.internal/course/spring-essentials", "Dependency injection, data access, and web layers."),
+]
+
+
+def seed_marketplace_data():
+    """Insert the curated jobs/mentors/learning-resources catalog if each
+    table is still empty. Safe to call every startup - never duplicates."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM jobs")
+        if cursor.fetchone()[0] == 0:
+            cursor.executemany(
+                """INSERT INTO jobs (title, description, required_skills, department, is_internal)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                _SEED_JOBS,
+            )
+
+        cursor.execute("SELECT COUNT(*) FROM mentors")
+        if cursor.fetchone()[0] == 0:
+            cursor.executemany(
+                "INSERT INTO mentors (name, expertise, bio) VALUES (%s, %s, %s)",
+                _SEED_MENTORS,
+            )
+
+        cursor.execute("SELECT COUNT(*) FROM learning_resources")
+        if cursor.fetchone()[0] == 0:
+            cursor.executemany(
+                "INSERT INTO learning_resources (title, skill_tag, url, description) VALUES (%s, %s, %s, %s)",
+                _SEED_LEARNING_RESOURCES,
+            )
+
+        cursor.close()
+    finally:
+        conn.close()
+
+
+def get_jobs():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM jobs")
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+    finally:
+        conn.close()
+
+
+def get_mentors():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM mentors")
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+    finally:
+        conn.close()
+
+
+def get_learning_resources():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM learning_resources")
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+    finally:
+        conn.close()
+
+
+def set_job_embedding(job_id, embedding_json):
+    _set_embedding("jobs", job_id, embedding_json)
+
+
+def set_mentor_embedding(mentor_id, embedding_json):
+    _set_embedding("mentors", mentor_id, embedding_json)
+
+
+def set_learning_resource_embedding(resource_id, embedding_json):
+    _set_embedding("learning_resources", resource_id, embedding_json)
+
+
+def _set_embedding(table, row_id, embedding_json):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE {table} SET embedding_json = %s WHERE id = %s", (embedding_json, row_id))
+        cursor.close()
     finally:
         conn.close()
