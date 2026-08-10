@@ -177,6 +177,35 @@ def create_account_if_missing(username, password, role="admin"):
         conn.close()
 
 
+def set_password(username, new_password):
+    """Change an existing account's password.
+
+    create_account_if_missing() deliberately never overwrites an existing
+    password, so editing ADMIN_PASSWORD in .env does NOT change the
+    password of an account that already exists - the stored bcrypt hash
+    stays as it was. This is the supported way to actually rotate it:
+
+        python -c "import db; db.set_password('admin', 'new-password')"
+
+    Returns True if a row was updated, False if the username is unknown.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        password_hash = bcrypt.hashpw(
+            new_password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+        cursor.execute(
+            "UPDATE users SET password_hash = %s WHERE username = %s",
+            (password_hash, username),
+        )
+        updated = cursor.rowcount > 0
+        cursor.close()
+        return updated
+    finally:
+        conn.close()
+
+
 def verify_login(username, password):
     """Check a username/password against the stored hash. Returns the
     user dict (id, role, ...) on success, or None on failure - never
@@ -379,8 +408,13 @@ def save_report(assessment_id, pdf_path, email_status="not_attempted"):
 
 
 def get_all_assessments():
-    """Return every assessment joined with the candidate's email, newest first.
-    Used by the admin dashboard and by Excel export - list of dicts."""
+    """Completed assessments joined with the candidate's email, newest first.
+
+    Restricted to completed attempts so this matches get_dashboard_stats()
+    (which also counts only completed ones) - otherwise the metric row and
+    the records table disagreed. In-progress attempts have a NULL
+    completed_at and are surfaced separately as the 'abandoned' count.
+    """
     conn = get_connection()
     try:
         cursor = conn.cursor(dictionary=True)
@@ -389,6 +423,7 @@ def get_all_assessments():
                       a.ai_generated, a.completed_at
                FROM assessments a
                JOIN users u ON u.id = a.user_id
+               WHERE a.completion_status = 'completed'
                ORDER BY a.completed_at DESC"""
         )
         rows = cursor.fetchall()

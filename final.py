@@ -143,6 +143,35 @@ label, .stRadio label, .stSelectbox label, .stTextInput label, .stTextArea label
 }
 .stDownloadButton button * { color: #ffffff !important; }
 
+/* ---------- Icon-only toolbar buttons: leave them alone ----------
+   The dataframe hover toolbar (download CSV / search / fullscreen) and
+   the app header use the same stBaseButton testid prefix as real action
+   buttons. The broad rule above was painting them solid indigo and
+   forcing their Material Symbols glyphs white, which rendered as four
+   blank blue squares instead of icons. Reset them to a subtle,
+   icon-appropriate style. */
+[data-testid="stElementToolbar"] button,
+[data-testid="stElementToolbarButton"],
+[data-testid^="stBaseButton-elementToolbar"],
+[data-testid^="stBaseButton-header"],
+[data-testid^="stBaseButton-borderless"] {
+    background: transparent !important;
+    padding: 4px !important;
+}
+[data-testid="stElementToolbar"] button *,
+[data-testid="stElementToolbarButton"] *,
+[data-testid^="stBaseButton-elementToolbar"] *,
+[data-testid^="stBaseButton-header"] *,
+[data-testid^="stBaseButton-borderless"] * {
+    color: #334155 !important;
+    fill: #334155 !important;
+}
+[data-testid="stElementToolbar"] button:hover,
+[data-testid="stElementToolbarButton"]:hover,
+[data-testid^="stBaseButton-elementToolbar"]:hover {
+    background: #e2e8f0 !important;
+}
+
 /* ---------- Radio options: readable card rows ---------- */
 .stRadio [role="radiogroup"] > label {
     background: #ffffff;
@@ -1022,8 +1051,11 @@ elif st.session_state.step == "admin_dashboard":
         stats = db.get_dashboard_stats()
 
         df = pd.DataFrame(rows)
-        df["Date"] = df["completed_at"].apply(lambda d: d.strftime("%Y-%m-%d") if d else "")
-        df["Time"] = df["completed_at"].apply(lambda d: d.strftime("%H:%M:%S") if d else "")
+        # pd.notna, not a truthiness test: pandas turns a NULL completed_at
+        # into NaT, and NaT is TRUTHY - so "if d" let it through and
+        # strftime raised "NaTType does not support strftime".
+        df["Date"] = df["completed_at"].apply(lambda d: d.strftime("%Y-%m-%d") if pd.notna(d) else "")
+        df["Time"] = df["completed_at"].apply(lambda d: d.strftime("%H:%M:%S") if pd.notna(d) else "")
         df["Accuracy %"] = df["accuracy"].apply(lambda a: float(a) if a is not None else 0.0)
         df["Source"] = df["ai_generated"].apply(lambda v: "AI" if v else "Fallback")
         df = df.rename(columns={"email": "Email", "score": "Score", "max_score": "Max Marks"})

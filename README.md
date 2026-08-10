@@ -93,9 +93,23 @@ It never prints secret values, only whether they're set.
 | Recruiter | `recruiter` | from `.env` | Read-only dashboard, no export |
 
 Reach the login via the 🔐 button in the top-right. Passwords are stored as
-bcrypt hashes; the values in `.env` only seed the accounts on first run.
+bcrypt hashes.
 
-**Change the default passwords in `.env` before using this for real.**
+### Changing a password
+
+The values in `.env` only **seed** an account the first time it's created —
+they are deliberately never re-applied, so an in-app password change can't
+be silently undone on the next restart.
+
+That means **editing `ADMIN_PASSWORD` in `.env` does not change the password
+of an account that already exists.** To actually rotate it, update `.env`
+and then apply it:
+
+```bash
+python -c "import db, config; db.set_password(config.ADMIN_USERNAME, config.ADMIN_PASSWORD)"
+```
+
+Same for the recruiter account, using `RECRUITER_USERNAME` / `RECRUITER_PASSWORD`.
 
 ---
 
