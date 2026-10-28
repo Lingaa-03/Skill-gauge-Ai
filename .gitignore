@@ -8,7 +8,7 @@ __pycache__/
 venv/
 
 # Editor/assistant tooling - not part of the project
-.claude/
+sample/
 
 # Local DB
 *.db
